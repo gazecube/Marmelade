@@ -1,5 +1,11 @@
 #include "app_internal.h"
 
+#define PLAYLIST_RETRY_DELAY_MS 750
+#define PLAYLIST_RETRY_LIMIT 10
+
+static XtIntervalId playlist_retry_timer = 0;
+static unsigned int playlist_retry_attempts = 0;
+
 size_t utf8_sequence_length(unsigned char c)
 {
     if ((c & 0x80u) == 0) return 1;
@@ -182,11 +188,33 @@ void select_current_source(void)
     }
 }
 
+void populate_sources(void);
+
+static void retry_playlists(XtPointer client_data, XtIntervalId *id)
+{
+    (void)client_data;
+    (void)id;
+    playlist_retry_timer = 0;
+    populate_sources();
+}
+
+static void schedule_playlist_retry(void)
+{
+    if (playlist_retry_timer != 0 || playlist_retry_attempts >= PLAYLIST_RETRY_LIMIT)
+        return;
+    playlist_retry_attempts++;
+    playlist_retry_timer = XtAppAddTimeOut(application_context,
+                                            PLAYLIST_RETRY_DELAY_MS,
+                                            retry_playlists, NULL);
+}
+
 /* Apple owns the normal source list; Marmelade only adds Now Playing and playlists. */
 void populate_sources(void)
 {
     char response[65536], title[512], id[256], path[512];
     const char *cursor;
+    unsigned int playlist_count = 0;
+
     XmListDeleteAllItems(source_list_widget);
     source_count = 0;
 
@@ -210,24 +238,30 @@ void populate_sources(void)
         }
     }
 
-    snprintf(source_titles[source_count], sizeof(source_titles[0]), "PLAYLISTS");
-    source_paths[source_count][0] = '\0';
-    source_count++;
-
     if (bridge_client_request(&bridge, "GET", "/v1/library/playlists", NULL,
-                              response, sizeof(response)) != 0) {
-        refresh_source_labels();
-        return;
+                              response, sizeof(response)) == 0) {
+        cursor = strstr(response, "\"items\"");
+        while (cursor && (cursor = strstr(cursor, "\"id\"")) != NULL && source_count < 107) {
+            if (!json_string(cursor, "id", id, sizeof(id)) ||
+                !json_string(cursor, "title", title, sizeof(title))) break;
+            snprintf(path, sizeof(path), "/v1/library/playlists/%s", id);
+            snprintf(source_titles[source_count], sizeof(source_titles[0]), "%s", title);
+            snprintf(source_paths[source_count], sizeof(source_paths[0]), "%s", path);
+            source_count++;
+            playlist_count++;
+            cursor += 4;
+        }
     }
-    cursor = strstr(response, "\"items\"");
-    while (cursor && (cursor = strstr(cursor, "\"id\"")) != NULL && source_count < 107) {
-        if (!json_string(cursor, "id", id, sizeof(id)) ||
-            !json_string(cursor, "title", title, sizeof(title))) break;
-        snprintf(path, sizeof(path), "/v1/library/playlists/%s", id);
-        snprintf(source_titles[source_count], sizeof(source_titles[0]), "%s", title);
-        snprintf(source_paths[source_count], sizeof(source_paths[0]), "%s", path);
-        source_count++;
-        cursor += 4;
-    }
+
     refresh_source_labels();
+
+    if (playlist_count == 0) {
+        schedule_playlist_retry();
+    } else {
+        playlist_retry_attempts = 0;
+        if (playlist_retry_timer != 0) {
+            XtRemoveTimeOut(playlist_retry_timer);
+            playlist_retry_timer = 0;
+        }
+    }
 }

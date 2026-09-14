@@ -1,0 +1,5 @@
+motif-apple-music
+*.o
+bridge/.state/
+cache/
+core

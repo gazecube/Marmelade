@@ -63,7 +63,7 @@ Pixmap rgb_pixmap_from_bytes(Widget widget, const unsigned char *rgb,
 Pixmap fetch_artwork_pixmap(Widget widget, unsigned int size, const char *url)
 {
     char encoded[3072], path[4096];
-    unsigned char *rgb;
+    unsigned char *rgb = NULL;
     size_t expected = (size_t)size * size * 3;
     size_t received = 0;
     Pixmap pixmap = XmUNSPECIFIED_PIXMAP;
@@ -74,10 +74,10 @@ Pixmap fetch_artwork_pixmap(Widget widget, unsigned int size, const char *url)
     } else {
         snprintf(path, sizeof(path), "/v1/player/artwork.rgb?size=%u", size);
     }
-    rgb = malloc(expected);
-    if (rgb == NULL) return XmUNSPECIFIED_PIXMAP;
-    if (bridge_client_request_bytes(&bridge, "GET", path, NULL, rgb, expected,
-                                    &received) == 0 && received == expected)
+
+    if (bridge_client_request_bytes(&bridge, "GET", path, NULL,
+                                    &rgb, &received) == 0 &&
+        received == expected && rgb != NULL)
         pixmap = rgb_pixmap_from_bytes(widget, rgb, size, size);
     free(rgb);
     return pixmap;

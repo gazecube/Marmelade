@@ -7,16 +7,21 @@ MOTIF_CFLAGS := $(shell $(PKG_CONFIG) --cflags xm xt x11 2>/dev/null)
 MOTIF_LIBS := $(shell $(PKG_CONFIG) --libs xm xt x11 2>/dev/null)
 XPM_CFLAGS := $(shell $(PKG_CONFIG) --cflags xpm 2>/dev/null)
 XPM_LIBS := $(shell $(PKG_CONFIG) --libs xpm 2>/dev/null)
+XFT_CFLAGS := $(shell $(PKG_CONFIG) --cflags xft fontconfig 2>/dev/null)
+XFT_LIBS := $(shell $(PKG_CONFIG) --libs xft fontconfig 2>/dev/null)
 ifeq ($(strip $(MOTIF_LIBS)),)
 MOTIF_LIBS := -lXm -lXt -lX11
 endif
 ifeq ($(strip $(XPM_LIBS)),)
 XPM_LIBS := -lXpm
 endif
+ifneq ($(strip $(XFT_LIBS)),)
+CPPFLAGS += -DMARMELADE_USE_XFT=1
+endif
 
 TARGET := marmelade
 VERSION := $(shell sed -n '1p' VERSION)
-SOURCES := src/main.c src/app_state.c src/json.c src/ui_icons.c src/icons.c src/browser.c src/sidebar.c src/view.c src/artwork.c src/grid.c src/player.c src/bridge_client.c
+SOURCES := src/main.c src/app_state.c src/json.c src/ui_icons.c src/icons.c src/browser.c src/sidebar.c src/view.c src/artwork.c src/grid.c src/player.c src/bridge_client.c src/utf8_text.c
 OBJECTS := $(SOURCES:.c=.o)
 
 .PHONY: all clean run bridge check dist
@@ -24,10 +29,13 @@ OBJECTS := $(SOURCES:.c=.o)
 all: $(TARGET)
 
 $(TARGET): $(OBJECTS)
-	$(CC) $(CFLAGS) -o $@ $(OBJECTS) $(MOTIF_LIBS) $(XPM_LIBS)
+	$(CC) $(CFLAGS) -o $@ $(OBJECTS) $(MOTIF_LIBS) $(XPM_LIBS) $(XFT_LIBS)
 
-src/%.o: src/%.c src/bridge_client.h src/app_internal.h
-	$(CC) $(CPPFLAGS) $(CFLAGS) $(MOTIF_CFLAGS) $(XPM_CFLAGS) -std=c99 -Wall -Wextra -Wpedantic -c -o $@ $<
+src/utf8_text.o: src/utf8_text.c
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(MOTIF_CFLAGS) $(XFT_CFLAGS) -std=c99 -Wall -Wextra -Wpedantic -c -o $@ $<
+
+src/%.o: src/%.c src/bridge_client.h src/app_internal.h src/utf8_text.h
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(MOTIF_CFLAGS) $(XPM_CFLAGS) $(XFT_CFLAGS) -include src/utf8_text.h -std=c99 -Wall -Wextra -Wpedantic -c -o $@ $<
 
 run: $(TARGET)
 	./$(TARGET)

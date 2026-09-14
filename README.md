@@ -104,6 +104,12 @@ See [`docs/protocol.md`](docs/protocol.md) for the current bridge contract.
 
 Feature milestones use whole DEV numbers, for example `0.2.0-DEV-23`. Small fixes and presentation-only revisions stay on the same milestone with a fractional suffix, for example `0.2.0-DEV-22.3`.
 
-## Status
 
-This is development software and is not affiliated with or endorsed by Apple Inc.
+# A huge shoutout to
+Apple Inc. for making Apple Music. This software would *not* be possible without them having made the platform itself.
+ChatGPT, for actually coding this, again, would not exist without it.
+You, for using this. Thank you, genuinely. 
+
+## Legal Note:
+
+This is community-made software and is not affiliated with or endorsed by Apple Inc.

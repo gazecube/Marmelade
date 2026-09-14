@@ -16,7 +16,7 @@ endif
 
 TARGET := motif-apple-music
 VERSION := $(shell sed -n '1p' VERSION)
-SOURCES := src/main.c src/bridge_client.c
+SOURCES := src/main.c src/app_state.c src/json.c src/ui_icons.c src/icons.c src/browser.c src/sidebar.c src/view.c src/artwork.c src/grid.c src/player.c src/bridge_client.c
 OBJECTS := $(SOURCES:.c=.o)
 
 .PHONY: all clean run bridge check dist
@@ -26,7 +26,7 @@ all: $(TARGET)
 $(TARGET): $(OBJECTS)
 	$(CC) $(CFLAGS) -o $@ $(OBJECTS) $(MOTIF_LIBS) $(XPM_LIBS)
 
-src/%.o: src/%.c src/bridge_client.h
+src/%.o: src/%.c src/bridge_client.h src/app_internal.h
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(MOTIF_CFLAGS) $(XPM_CFLAGS) -std=c99 -Wall -Wextra -Wpedantic -c -o $@ $<
 
 run: $(TARGET)

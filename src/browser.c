@@ -15,12 +15,17 @@ void draw_browser_text(Display *display, Drawable drawable, GC gc,
     XmFontList font_list = browser_list_font_list();
     XmString string;
     Dimension height;
+    XRectangle clip;
     if (font_list == NULL || text == NULL || width <= 0) return;
     string = XmStringCreateLocalized((char *)text);
     height = XmStringHeight(font_list, string);
+    clip.x = (short)x;
+    clip.y = (short)y;
+    clip.width = (unsigned short)width;
+    clip.height = LIST_ROW_HEIGHT;
     XmStringDraw(display, drawable, font_list, string, gc,
                  (Position)x, (Position)(y + (LIST_ROW_HEIGHT - (int)height) / 2),
-                 (Dimension)width, alignment, XmSTRING_DIRECTION_L_TO_R, NULL);
+                 (Dimension)width, alignment, XmSTRING_DIRECTION_L_TO_R, &clip);
     XmStringFree(string);
 }
 
@@ -32,6 +37,7 @@ void draw_browser_row_columns(Display *display, Drawable drawable, GC gc,
     int artist_width = 200;
     int gap = 12;
     int duration_x, artist_x, title_width;
+    int available_for_title_artist;
     const char *kind;
 
     if (model >= current_view_count) return;
@@ -45,13 +51,20 @@ void draw_browser_row_columns(Display *display, Drawable drawable, GC gc,
         return;
     }
 
+    duration_x = width - LIST_SIDE_PAD - duration_width;
+    available_for_title_artist = duration_x - LIST_SIDE_PAD - gap;
+
     if (width < 420) artist_width = width / 3;
     if (artist_width < 96) artist_width = 96;
 
-    duration_x = width - LIST_SIDE_PAD - duration_width;
+    /* Preserve a useful title column by shrinking the artist column first. */
+    if (available_for_title_artist - gap - artist_width < 80)
+        artist_width = available_for_title_artist - gap - 80;
+    if (artist_width < 48) artist_width = 48;
+
     artist_x = duration_x - gap - artist_width;
     title_width = artist_x - gap - LIST_SIDE_PAD;
-    if (title_width < 32) title_width = 32;
+    if (title_width < 1) title_width = 1;
 
     if (strcmp(current_view_type, "queue") == 0) {
         snprintf(left, sizeof(left), "%s%s %s",

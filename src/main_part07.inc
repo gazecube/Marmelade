@@ -92,8 +92,15 @@ static void follow_volume_popup(Widget widget, XtPointer client_data,
                                 XEvent *event, Boolean *continue_dispatch)
 {
     (void)widget; (void)client_data; (void)continue_dispatch;
-    if (!volume_popup_visible || event == NULL || event->type != ConfigureNotify) return;
-    position_volume_popup();
+    if (!volume_popup_visible || event == NULL) return;
+    if (event->type == ConfigureNotify) {
+        position_volume_popup();
+        return;
+    }
+    if (event->type == FocusOut || event->type == UnmapNotify) {
+        XtPopdown(volume_popup);
+        volume_popup_visible = 0;
+    }
 }
 
 static void toggle_volume_popup(Widget widget, XtPointer client_data, XtPointer call_data)

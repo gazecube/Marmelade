@@ -13,15 +13,14 @@ int main(int argc, char **argv)
     unsigned int i;
     int bridge_start_result;
     static const char *demo_tracks[] = {
-        "Cats on Mars                 SEATBELTS                 2:44",
-        "Demo library is active       Motif Apple Music         --:--",
-        "Configure MusicKit to load   Your Apple Music library  --:--",
-        "Search and playback arrive   In the next milestone     --:--"
+        "If you're seeing this, the bridge either hasn't loaded for some reason, or",
+        "the list view hasn't repopulated. If it's the latter, switch to another",
+        "tab to repopulate the list with live data."
     };
 
     XtSetLanguageProc(NULL, NULL, NULL);
     shell = XtVaAppInitialize(&app, "MotifAppleMusic", NULL, 0, &argc, argv,
-                              NULL, XmNtitle, "Apple Music", NULL);
+                              NULL, XmNtitle, "Marmelade", NULL);
     application_context = app;
     XtVaSetValues(shell, XmNwidth, 940, XmNheight, 620, NULL);
     XtAddCallback(shell, XmNdestroyCallback, shutdown_app, NULL);

@@ -1,3 +1,5 @@
+#define _DEFAULT_SOURCE
+#define _XOPEN_SOURCE 700
 #define _POSIX_C_SOURCE 200809L
 
 #include "bridge_client.h"
@@ -64,7 +66,6 @@ static void sleep_ms(unsigned int ms)
     nanosleep(&delay, NULL);
 }
 
-
 static void set_socket_io_timeout(int socket_fd)
 {
     struct timeval timeout;
@@ -79,21 +80,45 @@ static void set_socket_io_timeout(int socket_fd)
     }
     timeout.tv_sec = timeout_ms / 1000;
     timeout.tv_usec = (timeout_ms % 1000) * 1000;
-    (void)setsockopt(socket_fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
-    (void)setsockopt(socket_fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
+    setsockopt(socket_fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+    setsockopt(socket_fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
 }
 
-static int write_all(int socket_fd, const char *data, size_t length)
+static int parse_http_url(const char *url, char *host, size_t host_size,
+                          char *port, size_t port_size, char *path, size_t path_size)
 {
-    size_t sent = 0;
-    while (sent < length) {
-        ssize_t count = write(socket_fd, data + sent, length - sent);
-        if (count > 0) {
-            sent += (size_t)count;
-            continue;
-        }
-        if (count < 0 && errno == EINTR) continue;
-        return -1;
+    const char *cursor, *slash, *colon;
+    size_t host_len, port_len;
+    if (url == NULL || strncmp(url, "http://", 7) != 0) return -1;
+    cursor = url + 7;
+    slash = strchr(cursor, '/');
+    if (slash == NULL) slash = cursor + strlen(cursor);
+    colon = memchr(cursor, ':', (size_t)(slash - cursor));
+    if (colon != NULL) {
+        host_len = (size_t)(colon - cursor);
+        port_len = (size_t)(slash - colon - 1);
+        if (port_len == 0 || port_len >= port_size) return -1;
+        memcpy(port, colon + 1, port_len);
+        port[port_len] = '\0';
+    } else {
+        host_len = (size_t)(slash - cursor);
+        snprintf(port, port_size, "80");
+    }
+    if (host_len == 0 || host_len >= host_size) return -1;
+    memcpy(host, cursor, host_len);
+    host[host_len] = '\0';
+    snprintf(path, path_size, "%s", *slash != '\0' ? slash : "/");
+    return 0;
+}
+
+static int send_all(int socket_fd, const void *buffer, size_t length)
+{
+    const unsigned char *cursor = (const unsigned char *)buffer;
+    while (length > 0) {
+        ssize_t written = send(socket_fd, cursor, length, 0);
+        if (written <= 0) return -1;
+        cursor += written;
+        length -= (size_t)written;
     }
     return 0;
 }
@@ -102,49 +127,199 @@ void bridge_client_init(BridgeClient *client)
 {
     const char *url = getenv("MOTIF_APPLE_MUSIC_BRIDGE_URL");
     memset(client, 0, sizeof(*client));
-    snprintf(client->host, sizeof(client->host), "%s", "127.0.0.1");
-    client->port = 17876;
-    client->managed = getenv("MOTIF_APPLE_MUSIC_MANAGE_BRIDGE") == NULL ||
-                      strcmp(getenv("MOTIF_APPLE_MUSIC_MANAGE_BRIDGE"), "0") != 0;
-    if (url != NULL) {
-        char host[256];
-        unsigned int port;
-        if (sscanf(url, "http://%255[^:]:%u", host, &port) == 2 && port < 65536) {
-            snprintf(client->host, sizeof(client->host), "%s", host);
-            client->port = (unsigned short)port;
+    client->child_pid = -1;
+    snprintf(client->base_url, sizeof(client->base_url), "%s",
+             (url != NULL && url[0] != '\0') ? url : "http://127.0.0.1:17876");
+}
+
+int bridge_client_request(BridgeClient *client, const char *method, const char *path,
+                          const char *body, char *response, size_t response_size)
+{
+    char host[256], port[16], base_path[512], request_path[1024];
+    char request[8192], header[4096];
+    struct addrinfo hints, *addresses = NULL, *item;
+    int socket_fd = -1, status = 0, content_length = -1;
+    size_t used = 0;
+    ssize_t count;
+    char *body_start;
+
+    if (parse_http_url(client->base_url, host, sizeof(host), port, sizeof(port),
+                       base_path, sizeof(base_path)) != 0) return -1;
+    snprintf(request_path, sizeof(request_path), "%s%s",
+             strcmp(base_path, "/") == 0 ? "" : base_path, path);
+
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    if (getaddrinfo(host, port, &hints, &addresses) != 0) return -1;
+    for (item = addresses; item != NULL; item = item->ai_next) {
+        socket_fd = socket(item->ai_family, item->ai_socktype, item->ai_protocol);
+        if (socket_fd >= 0) set_socket_io_timeout(socket_fd);
+        if (socket_fd >= 0 && connect(socket_fd, item->ai_addr, item->ai_addrlen) == 0) break;
+        if (socket_fd >= 0) close(socket_fd);
+        socket_fd = -1;
+    }
+    freeaddrinfo(addresses);
+    if (socket_fd < 0) return -1;
+
+    snprintf(request, sizeof(request),
+             "%s %s HTTP/1.1\r\nHost: %s:%s\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: %zu\r\n\r\n%s",
+             method, request_path, host, port, body != NULL ? strlen(body) : 0,
+             body != NULL ? body : "");
+    if (send_all(socket_fd, request, strlen(request)) != 0) {
+        close(socket_fd);
+        return -1;
+    }
+
+    while ((count = recv(socket_fd, response + used,
+                         response_size > used + 1 ? response_size - used - 1 : 0, 0)) > 0) {
+        used += (size_t)count;
+        if (used + 1 >= response_size) break;
+    }
+    close(socket_fd);
+    if (response_size == 0) return -1;
+    response[used] = '\0';
+
+    body_start = strstr(response, "\r\n\r\n");
+    if (body_start == NULL) return -1;
+    if (sscanf(response, "HTTP/%*s %d", &status) != 1) return -1;
+    {
+        char *length_header = strstr(response, "Content-Length:");
+        if (length_header == NULL) length_header = strstr(response, "content-length:");
+        if (length_header != NULL) sscanf(length_header, "%*[^:]: %d", &content_length);
+    }
+    body_start += 4;
+    if (content_length >= 0 && (size_t)content_length + 1 < response_size) {
+        memmove(response, body_start, (size_t)content_length);
+        response[content_length] = '\0';
+    } else {
+        size_t body_length = used - (size_t)(body_start - response);
+        memmove(response, body_start, body_length);
+        response[body_length] = '\0';
+    }
+    return status >= 200 && status < 300 ? 0 : -1;
+}
+
+int bridge_client_request_bytes(BridgeClient *client, const char *method, const char *path,
+                                const char *body, unsigned char **response,
+                                size_t *response_size)
+{
+    char host[256], port[16], base_path[512], request_path[1024];
+    char request[8192], header[8192];
+    struct addrinfo hints, *addresses = NULL, *item;
+    unsigned char *buffer = NULL;
+    size_t capacity = 0, used = 0, header_size = 0, body_size = 0;
+    int socket_fd = -1, status = 0, content_length = -1;
+    ssize_t count;
+
+    (void)header;
+    if (response == NULL || response_size == NULL) return -1;
+    *response = NULL;
+    *response_size = 0;
+
+    if (parse_http_url(client->base_url, host, sizeof(host), port, sizeof(port),
+                       base_path, sizeof(base_path)) != 0) return -1;
+    snprintf(request_path, sizeof(request_path), "%s%s",
+             strcmp(base_path, "/") == 0 ? "" : base_path, path);
+
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    if (getaddrinfo(host, port, &hints, &addresses) != 0) return -1;
+    for (item = addresses; item != NULL; item = item->ai_next) {
+        socket_fd = socket(item->ai_family, item->ai_socktype, item->ai_protocol);
+        if (socket_fd >= 0) set_socket_io_timeout(socket_fd);
+        if (socket_fd >= 0 && connect(socket_fd, item->ai_addr, item->ai_addrlen) == 0) break;
+        if (socket_fd >= 0) close(socket_fd);
+        socket_fd = -1;
+    }
+    freeaddrinfo(addresses);
+    if (socket_fd < 0) return -1;
+
+    snprintf(request, sizeof(request),
+             "%s %s HTTP/1.1\r\nHost: %s:%s\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: %zu\r\n\r\n%s",
+             method, request_path, host, port, body != NULL ? strlen(body) : 0,
+             body != NULL ? body : "");
+    if (send_all(socket_fd, request, strlen(request)) != 0) {
+        close(socket_fd);
+        return -1;
+    }
+
+    capacity = 65536;
+    buffer = malloc(capacity);
+    if (buffer == NULL) {
+        close(socket_fd);
+        return -1;
+    }
+    while ((count = recv(socket_fd, buffer + used, capacity - used, 0)) > 0) {
+        used += (size_t)count;
+        if (used == capacity) {
+            unsigned char *grown;
+            if (capacity > 16 * 1024 * 1024) break;
+            capacity *= 2;
+            grown = realloc(buffer, capacity);
+            if (grown == NULL) break;
+            buffer = grown;
         }
     }
+    close(socket_fd);
+
+    {
+        unsigned char *marker = NULL;
+        size_t i;
+        for (i = 3; i < used; ++i) {
+            if (buffer[i - 3] == '\r' && buffer[i - 2] == '\n' &&
+                buffer[i - 1] == '\r' && buffer[i] == '\n') {
+                marker = buffer + i - 3;
+                break;
+            }
+        }
+        if (marker == NULL) {
+            free(buffer);
+            return -1;
+        }
+        header_size = (size_t)(marker - buffer) + 4;
+    }
+
+    if (sscanf((char *)buffer, "HTTP/%*s %d", &status) != 1) {
+        free(buffer);
+        return -1;
+    }
+    {
+        char *length_header = strstr((char *)buffer, "Content-Length:");
+        if (length_header == NULL) length_header = strstr((char *)buffer, "content-length:");
+        if (length_header != NULL) sscanf(length_header, "%*[^:]: %d", &content_length);
+    }
+
+    body_size = used - header_size;
+    if (content_length >= 0 && (size_t)content_length < body_size)
+        body_size = (size_t)content_length;
+
+    *response = malloc(body_size ? body_size : 1);
+    if (*response == NULL) {
+        free(buffer);
+        return -1;
+    }
+    if (body_size != 0) memcpy(*response, buffer + header_size, body_size);
+    *response_size = body_size;
+    free(buffer);
+    return status >= 200 && status < 300 ? 0 : -1;
 }
 
 int bridge_client_start(BridgeClient *client)
 {
-    const char *node;
-    const char *script;
-    char response[512];
+    const char *manage = getenv("MOTIF_APPLE_MUSIC_MANAGE_BRIDGE");
+    const char *node = getenv("MOTIF_APPLE_MUSIC_NODE");
+    const char *script = getenv("MOTIF_APPLE_MUSIC_BRIDGE_SCRIPT");
     pid_t pid;
-    if (!client->managed)
-        return 0;
 
-    /* A prior client may already own the bridge. Reuse it only after verifying
-       the service identity; never attach to an arbitrary process on the port. */
-    if (bridge_client_request(client, "GET", "/v1/status", NULL,
-                              response, sizeof(response)) == 0) {
-        if (strstr(response, "motif-apple-music-bridge") != NULL &&
-            strstr(response, "\"apiVersion\":8") != NULL) {
-            client->managed = 0;
-            return BRIDGE_START_OK;
-        }
-        return BRIDGE_START_INCOMPATIBLE;
-    }
+    if (manage != NULL && strcmp(manage, "0") == 0) return BRIDGE_START_OK;
+    if (node == NULL || node[0] == '\0') node = "node";
+    if (script == NULL || script[0] == '\0') script = "bridge/server.mjs";
+    if (!executable_available(node)) return BRIDGE_START_NODE_MISSING;
 
-    node = getenv("MOTIF_APPLE_MUSIC_NODE");
-    script = getenv("MOTIF_APPLE_MUSIC_BRIDGE_SCRIPT");
-    if (node == NULL) node = "node";
-    if (script == NULL) script = "bridge/server.mjs";
-    if (!executable_available(node))
-        return BRIDGE_START_NODE_MISSING;
     pid = fork();
-    if (pid < 0) return BRIDGE_START_ERROR;
+    if (pid < 0) return BRIDGE_START_FAILED;
     if (pid == 0) {
         execlp(node, node, script, (char *)NULL);
         _exit(127);
@@ -153,146 +328,26 @@ int bridge_client_start(BridgeClient *client)
     return BRIDGE_START_OK;
 }
 
-int bridge_client_request(BridgeClient *client, const char *method,
-                          const char *path, const char *body,
-                          char *response, size_t response_size)
-{
-    struct addrinfo hints, *addresses = NULL, *item;
-    char port[16], request[4096], incoming[8192];
-    const char *payload = body == NULL ? "" : body;
-    size_t used = 0;
-    int socket_fd = -1, status = -1, header_done = 0, http_status = 0;
-    ssize_t count;
-
-    memset(&hints, 0, sizeof(hints));
-    hints.ai_family = AF_UNSPEC;
-    hints.ai_socktype = SOCK_STREAM;
-    snprintf(port, sizeof(port), "%u", client->port);
-    if (getaddrinfo(client->host, port, &hints, &addresses) != 0) return -1;
-    for (item = addresses; item != NULL; item = item->ai_next) {
-        socket_fd = socket(item->ai_family, item->ai_socktype, item->ai_protocol);
-        if (socket_fd >= 0) set_socket_io_timeout(socket_fd);
-        if (socket_fd >= 0 && connect(socket_fd, item->ai_addr, item->ai_addrlen) == 0) break;
-        if (socket_fd >= 0) close(socket_fd);
-        socket_fd = -1;
-    }
-    freeaddrinfo(addresses);
-    if (socket_fd < 0) return -1;
-    snprintf(request, sizeof(request),
-             "%s %s HTTP/1.1\r\nHost: %s:%u\r\nContent-Type: application/json\r\n"
-             "Content-Length: %zu\r\nConnection: close\r\n\r\n%s",
-             method, path, client->host, client->port, strlen(payload), payload);
-    if (write_all(socket_fd, request, strlen(request)) != 0) goto done;
-    while ((count = read(socket_fd, incoming, sizeof(incoming))) > 0) {
-        size_t i;
-        if (http_status == 0 && (size_t)count >= 12 &&
-            memcmp(incoming, "HTTP/", 5) == 0)
-            sscanf(incoming, "HTTP/%*s %d", &http_status);
-        for (i = 0; i < (size_t)count; ++i) {
-            if (!header_done) {
-                static const char marker[] = "\r\n\r\n";
-                request[used < sizeof(request) ? used : 0] = incoming[i];
-                if (used < 3) used++;
-                else {
-                    request[0] = request[1]; request[1] = request[2];
-                    request[2] = request[3]; request[3] = incoming[i];
-                    used = 4;
-                    if (memcmp(request, marker, 4) == 0) { header_done = 1; used = 0; }
-                }
-            } else if (used + 1 < response_size) {
-                response[used++] = incoming[i];
-            }
-        }
-    }
-    if (count < 0 && errno != EINTR) goto done;
-    if (response_size > 0) response[used] = '\0';
-    status = header_done && http_status >= 200 && http_status < 300 ? 0 : -1;
-done:
-    close(socket_fd);
-    return status;
-}
-
-int bridge_client_request_bytes(BridgeClient *client, const char *method,
-                                const char *path, const char *body,
-                                unsigned char *response, size_t response_size,
-                                size_t *response_length)
-{
-    struct addrinfo hints, *addresses = NULL, *item;
-    char port[16], request[4096], headers[8192];
-    const char *payload = body == NULL ? "" : body;
-    size_t header_used = 0, body_used = 0;
-    int socket_fd = -1, status = -1, header_done = 0, http_status = 0, overflow = 0;
-    unsigned char incoming[8192];
-    ssize_t count;
-
-    if (response_length != NULL) *response_length = 0;
-    memset(&hints, 0, sizeof(hints));
-    hints.ai_family = AF_UNSPEC;
-    hints.ai_socktype = SOCK_STREAM;
-    snprintf(port, sizeof(port), "%u", client->port);
-    if (getaddrinfo(client->host, port, &hints, &addresses) != 0) return -1;
-    for (item = addresses; item != NULL; item = item->ai_next) {
-        socket_fd = socket(item->ai_family, item->ai_socktype, item->ai_protocol);
-        if (socket_fd >= 0) set_socket_io_timeout(socket_fd);
-        if (socket_fd >= 0 && connect(socket_fd, item->ai_addr, item->ai_addrlen) == 0) break;
-        if (socket_fd >= 0) close(socket_fd);
-        socket_fd = -1;
-    }
-    freeaddrinfo(addresses);
-    if (socket_fd < 0) return -1;
-
-    snprintf(request, sizeof(request),
-             "%s %s HTTP/1.1\r\nHost: %s:%u\r\nContent-Type: application/json\r\n"
-             "Content-Length: %zu\r\nConnection: close\r\n\r\n%s",
-             method, path, client->host, client->port, strlen(payload), payload);
-    if (write_all(socket_fd, request, strlen(request)) != 0) goto done;
-
-    while ((count = read(socket_fd, incoming, sizeof(incoming))) > 0) {
-        size_t i;
-        for (i = 0; i < (size_t)count; ++i) {
-            if (!header_done) {
-                if (header_used + 1 >= sizeof(headers)) { overflow = 1; goto done; }
-                headers[header_used++] = (char)incoming[i];
-                headers[header_used] = '\0';
-                if (header_used >= 4 &&
-                    memcmp(headers + header_used - 4, "\r\n\r\n", 4) == 0) {
-                    header_done = 1;
-                    sscanf(headers, "HTTP/%*s %d", &http_status);
-                }
-            } else {
-                if (body_used < response_size) response[body_used] = incoming[i];
-                else overflow = 1;
-                body_used++;
-            }
-        }
-    }
-    if (count < 0 && errno != EINTR) goto done;
-    if (response_length != NULL) *response_length = body_used;
-    status = header_done && !overflow && http_status >= 200 && http_status < 300 ? 0 : -1;
-done:
-    if (response_length != NULL) *response_length = body_used;
-    close(socket_fd);
-    return status;
-}
-
 int bridge_client_wait_ready(BridgeClient *client, unsigned int timeout_ms)
 {
-    unsigned int elapsed;
-    char response[512];
-    for (elapsed = 0; elapsed < timeout_ms; elapsed += 100) {
+    unsigned int waited = 0;
+    char response[2048];
+    while (waited < timeout_ms) {
         if (bridge_client_request(client, "GET", "/v1/status", NULL,
                                   response, sizeof(response)) == 0)
             return 0;
         sleep_ms(100);
+        waited += 100;
     }
     return -1;
 }
 
 void bridge_client_stop(BridgeClient *client)
 {
-    if (client->managed && client->child_pid > 0) {
-        kill(client->child_pid, SIGTERM);
-        waitpid(client->child_pid, NULL, 0);
-        client->child_pid = 0;
-    }
+    char response[2048];
+    if (client->child_pid <= 0) return;
+    bridge_client_request(client, "POST", "/v1/shutdown", "{}", response, sizeof(response));
+    kill(client->child_pid, SIGTERM);
+    waitpid(client->child_pid, NULL, 0);
+    client->child_pid = -1;
 }

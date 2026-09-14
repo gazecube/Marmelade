@@ -1,2 +1,3 @@
 # Marmelade
-Marmelade: an Apple Music client that uses the Motif Widget Toolkit, build for GNU/Linux and generic UNIX-like systems
+
+This is Marmelade, an unofficial Apple Music client built with node.JS and Chromium for the backend, and C/Motif for the frontend!

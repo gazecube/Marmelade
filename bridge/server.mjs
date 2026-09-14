@@ -1,6 +1,7 @@
 import http from 'node:http';
 import { URL } from 'node:url';
 import { ChromiumAppleMusic } from './chromium.mjs';
+import { navigationSources } from './navigation.mjs';
 
 const host = process.env.MOTIF_APPLE_MUSIC_BRIDGE_HOST || '127.0.0.1';
 const port = Number.parseInt(process.env.MOTIF_APPLE_MUSIC_BRIDGE_PORT || '17876', 10);
@@ -56,6 +57,8 @@ const server = http.createServer(async (request, response) => {
     }
     if (request.method === 'GET' && url.pathname === '/v1/diagnostics')
       return send(response, 200, {ok:true, diagnostics:await browser.diagnostics()});
+    if (request.method === 'GET' && url.pathname === '/v1/navigation/sources')
+      return send(response, 200, {source:'apple-music-web',items:await navigationSources(browser)});
     if (request.method === 'GET' && url.pathname === '/v1/library/tracks') {
       try {
         currentView = await browser.currentView(100);

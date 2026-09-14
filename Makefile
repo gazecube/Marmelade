@@ -3,6 +3,8 @@ PKG_CONFIG ?= pkg-config
 CFLAGS ?= -O2 -g
 CPPFLAGS ?=
 
+CPPFLAGS += -D_DEFAULT_SOURCE -D_XOPEN_SOURCE=700 -D_POSIX_C_SOURCE=200809L
+
 MOTIF_CFLAGS := $(shell $(PKG_CONFIG) --cflags xm xt x11 2>/dev/null)
 MOTIF_LIBS := $(shell $(PKG_CONFIG) --libs xm xt x11 2>/dev/null)
 XPM_CFLAGS := $(shell $(PKG_CONFIG) --cflags xpm 2>/dev/null)

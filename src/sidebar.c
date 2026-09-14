@@ -5,6 +5,9 @@
 
 static XtIntervalId playlist_retry_timer = 0;
 static unsigned int playlist_retry_attempts = 0;
+static Widget sidebar_source_scroller = NULL;
+static Widget sidebar_source_canvas = NULL;
+static int sidebar_selected_index = -1;
 
 size_t utf8_sequence_length(unsigned char c)
 {
@@ -67,9 +70,214 @@ void sidebar_display_title(const char *title, int max_pixels,
 int sidebar_available_label_width(void)
 {
     Dimension width = 0;
-    if (source_list_widget == NULL) return 140;
-    XtVaGetValues(source_list_widget, XmNwidth, &width, NULL);
-    return width > 24 ? (int)width - 24 : 1;
+    if (sidebar_source_canvas != NULL)
+        XtVaGetValues(sidebar_source_canvas, XmNwidth, &width, NULL);
+    else if (source_list_widget != NULL)
+        XtVaGetValues(source_list_widget, XmNwidth, &width, NULL);
+    else
+        return 140;
+    return width > 16 ? (int)width - 16 : 1;
+}
+
+static void sidebar_list_reflow(void)
+{
+    Widget clip = NULL;
+    Dimension width = 140, height = 120, content_height;
+
+    if (sidebar_source_scroller == NULL || sidebar_source_canvas == NULL) return;
+    XtVaGetValues(sidebar_source_scroller, XmNclipWindow, &clip, NULL);
+    if (clip != NULL)
+        XtVaGetValues(clip, XmNwidth, &width, XmNheight, &height, NULL);
+    else
+        XtVaGetValues(sidebar_source_scroller, XmNwidth, &width, XmNheight, &height, NULL);
+
+    if (width < 48) width = 48;
+    content_height = (Dimension)(source_count * LIST_ROW_HEIGHT);
+    if (content_height < height) content_height = height;
+    if (content_height < LIST_ROW_HEIGHT) content_height = LIST_ROW_HEIGHT;
+    XtVaSetValues(sidebar_source_canvas,
+                  XmNwidth, width,
+                  XmNheight, content_height,
+                  NULL);
+}
+
+static void redraw_sidebar_row(int row)
+{
+    if (row < 0 || (unsigned int)row >= source_count ||
+        sidebar_source_canvas == NULL || !XtIsRealized(sidebar_source_canvas)) return;
+    XClearArea(XtDisplay(sidebar_source_canvas), XtWindow(sidebar_source_canvas),
+               0, row * LIST_ROW_HEIGHT, 0, LIST_ROW_HEIGHT, True);
+}
+
+static void draw_sidebar_list(XExposeEvent *expose)
+{
+    Display *display;
+    Window window;
+    Screen *screen;
+    Colormap colormap;
+    XmFontList font_list = NULL;
+    Pixel foreground, background, derived_foreground, top, bottom, select;
+    XGCValues values;
+    GC gc;
+    Dimension width = 0;
+    unsigned int first, last, row;
+    char display_title[512];
+
+    if (sidebar_source_canvas == NULL || source_list_widget == NULL ||
+        !XtIsRealized(sidebar_source_canvas)) return;
+
+    display = XtDisplay(sidebar_source_canvas);
+    window = XtWindow(sidebar_source_canvas);
+    screen = XtScreen(sidebar_source_canvas);
+    colormap = DefaultColormapOfScreen(screen);
+    XtVaGetValues(source_list_widget,
+                  XmNfontList, &font_list,
+                  XmNforeground, &foreground,
+                  XmNbackground, &background,
+                  NULL);
+    XtVaGetValues(sidebar_source_canvas, XmNwidth, &width, NULL);
+    if (font_list == NULL) return;
+
+    XmGetColors(screen, colormap, background,
+                &derived_foreground, &top, &bottom, &select);
+    values.foreground = foreground;
+    values.background = background;
+    gc = XCreateGC(display, window, GCForeground | GCBackground, &values);
+
+    first = expose->y > 0 ? (unsigned int)expose->y / LIST_ROW_HEIGHT : 0;
+    last = (unsigned int)(expose->y + expose->height) / LIST_ROW_HEIGHT + 1;
+    if (last > source_count) last = source_count;
+
+    for (row = first; row < last; ++row) {
+        XmString string;
+        Dimension text_height;
+        int y = (int)row * LIST_ROW_HEIGHT;
+        int text_width = width > LIST_SIDE_PAD * 2 ?
+                         (int)width - LIST_SIDE_PAD * 2 : (int)width;
+
+        if ((int)row == sidebar_selected_index) {
+            XSetForeground(display, gc, select);
+            XFillRectangle(display, window, gc, 0, y, width, LIST_ROW_HEIGHT);
+            XSetForeground(display, gc, foreground);
+        }
+
+        sidebar_display_title(source_titles[row], text_width,
+                              display_title, sizeof(display_title));
+        string = XmStringCreateLocalized(display_title);
+        text_height = XmStringHeight(font_list, string);
+        XmStringDraw(display, window, font_list, string, gc,
+                     LIST_SIDE_PAD,
+                     (Position)(y + (LIST_ROW_HEIGHT - (int)text_height) / 2),
+                     (Dimension)text_width,
+                     XmALIGNMENT_BEGINNING,
+                     XmSTRING_DIRECTION_L_TO_R, NULL);
+        XmStringFree(string);
+    }
+
+    XFreeGC(display, gc);
+}
+
+static void sidebar_list_scrolled(Widget widget, XtPointer client_data, XtPointer call_data)
+{
+    (void)client_data;
+    (void)call_data;
+    repaint_scrollbar_widget(widget);
+}
+
+static void sidebar_list_event(Widget widget, XtPointer client_data,
+                               XEvent *event, Boolean *continue_dispatch)
+{
+    (void)client_data;
+    (void)continue_dispatch;
+
+    if (event->type == ConfigureNotify) {
+        if (widget == sidebar_source_scroller || widget == sidebar_source_canvas) {
+            sidebar_list_reflow();
+            if (sidebar_source_canvas != NULL && XtIsRealized(sidebar_source_canvas))
+                XClearArea(XtDisplay(sidebar_source_canvas), XtWindow(sidebar_source_canvas),
+                           0, 0, 0, 0, True);
+        }
+        return;
+    }
+
+    if (widget != sidebar_source_canvas) return;
+    if (event->type == Expose) {
+        draw_sidebar_list(&event->xexpose);
+        return;
+    }
+    if (event->type == ButtonPress && event->xbutton.button == Button1) {
+        unsigned int row = (unsigned int)event->xbutton.y / LIST_ROW_HEIGHT;
+        if (row >= source_count) return;
+        XmListSelectPos(source_list_widget, (int)row + 1, True);
+    }
+}
+
+static void ensure_sidebar_custom_list(void)
+{
+    Widget parent, top_widget = NULL, bottom_widget = NULL;
+    Widget clip = NULL, vertical = NULL;
+    Pixel background = 0, foreground = 0;
+
+    if (sidebar_source_canvas != NULL || source_list_widget == NULL) return;
+
+    parent = XtParent(source_list_widget);
+    XtVaGetValues(source_list_widget,
+                  XmNtopWidget, &top_widget,
+                  XmNbottomWidget, &bottom_widget,
+                  XmNbackground, &background,
+                  XmNforeground, &foreground,
+                  NULL);
+
+    /* Keep the XmList around as a hidden font/style and callback proxy. */
+    XtUnmanageChild(source_list_widget);
+
+    sidebar_source_scroller = XtVaCreateManagedWidget(
+        "sourceListScroller", xmScrolledWindowWidgetClass, parent,
+        XmNscrollingPolicy, XmAUTOMATIC,
+        XmNshadowThickness, 0,
+        XmNbackground, background,
+        XmNforeground, foreground,
+        XmNtopAttachment, XmATTACH_WIDGET,
+        XmNtopWidget, top_widget,
+        XmNbottomAttachment, XmATTACH_WIDGET,
+        XmNbottomWidget, bottom_widget,
+        XmNleftAttachment, XmATTACH_FORM,
+        XmNrightAttachment, XmATTACH_FORM,
+        NULL);
+
+    sidebar_source_canvas = XtVaCreateManagedWidget(
+        "sourceListCanvas", xmDrawingAreaWidgetClass, sidebar_source_scroller,
+        XmNresizePolicy, XmRESIZE_NONE,
+        XmNwidth, 140,
+        XmNheight, LIST_ROW_HEIGHT,
+        XmNbackground, background,
+        XmNforeground, foreground,
+        NULL);
+
+    XmScrolledWindowSetAreas(sidebar_source_scroller, NULL, NULL, sidebar_source_canvas);
+    XtAddEventHandler(sidebar_source_canvas,
+                      ExposureMask | ButtonPressMask | StructureNotifyMask,
+                      False, sidebar_list_event, NULL);
+    XtAddEventHandler(sidebar_source_scroller, StructureNotifyMask,
+                      False, sidebar_list_event, NULL);
+    XtAddEventHandler(sidebar_source_canvas, ButtonPressMask,
+                      False, dismiss_volume_popup, NULL);
+
+    XtVaGetValues(sidebar_source_scroller,
+                  XmNclipWindow, &clip,
+                  XmNverticalScrollBar, &vertical,
+                  NULL);
+    if (clip != NULL)
+        XtVaSetValues(clip,
+                      XmNbackground, background,
+                      XmNforeground, foreground,
+                      NULL);
+    if (vertical != NULL) {
+        XtAddCallback(vertical, XmNvalueChangedCallback, sidebar_list_scrolled, NULL);
+        XtAddCallback(vertical, XmNdragCallback, sidebar_list_scrolled, NULL);
+    }
+
+    sidebar_list_reflow();
 }
 
 void select_current_source(void);
@@ -81,19 +289,22 @@ void refresh_source_labels(void)
     int max_pixels;
     XmString item;
     char display[512];
+
     if (source_list_widget == NULL) return;
     max_pixels = sidebar_available_label_width();
     XmListDeleteAllItems(source_list_widget);
     for (i = 0; i < source_count; ++i) {
-        if (source_paths[i][0] == '\0')
-            snprintf(display, sizeof(display), "%s", source_titles[i]);
-        else
-            sidebar_display_title(source_titles[i], max_pixels, display, sizeof(display));
+        sidebar_display_title(source_titles[i], max_pixels, display, sizeof(display));
         item = XmStringCreateLocalized(display);
         XmListAddItemUnselected(source_list_widget, item, 0);
         XmStringFree(item);
     }
+
+    sidebar_list_reflow();
     select_current_source();
+    if (sidebar_source_canvas != NULL && XtIsRealized(sidebar_source_canvas))
+        XClearArea(XtDisplay(sidebar_source_canvas), XtWindow(sidebar_source_canvas),
+                   0, 0, 0, 0, True);
 }
 
 unsigned int sidebar_artwork_size_for_width(Dimension width)
@@ -176,15 +387,23 @@ void sidebar_sizer_event(Widget widget, XtPointer client_data,
 void select_current_source(void)
 {
     unsigned int i;
+    int previous = sidebar_selected_index;
     const char *wanted = (browser_mode == 2 ||
                           strcmp(current_view_path, "/v1/player/queue") == 0)
                              ? "@now-playing" : current_view_path;
+
+    sidebar_selected_index = -1;
     if (source_list_widget == NULL) return;
     for (i = 0; i < source_count; ++i) {
         if (strcmp(source_paths[i], wanted) == 0) {
+            sidebar_selected_index = (int)i;
             XmListSelectPos(source_list_widget, (int)i + 1, False);
-            return;
+            break;
         }
+    }
+    if (previous != sidebar_selected_index) {
+        redraw_sidebar_row(previous);
+        redraw_sidebar_row(sidebar_selected_index);
     }
 }
 
@@ -215,7 +434,7 @@ void populate_sources(void)
     const char *cursor;
     unsigned int playlist_count = 0;
 
-    XmListDeleteAllItems(source_list_widget);
+    ensure_sidebar_custom_list();
     source_count = 0;
 
     if (now_playing_source_visible) {

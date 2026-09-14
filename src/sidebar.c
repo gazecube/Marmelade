@@ -1,5 +1,6 @@
 #include "app_internal.h"
 
+/* Return the number of bytes used by the UTF-8 sequence starting with c. */
 size_t utf8_sequence_length(unsigned char c)
 {
     if ((c & 0x80u) == 0) return 1;
@@ -9,6 +10,7 @@ size_t utf8_sequence_length(unsigned char c)
     return 1;
 }
 
+/* Measure a sidebar label using the same Motif font list as the source list. */
 int sidebar_text_width(const char *text)
 {
     XmFontList font_list = NULL;
@@ -24,6 +26,7 @@ int sidebar_text_width(const char *text)
     return (int)width;
 }
 
+/* Shorten a title to fit max_pixels without cutting through a UTF-8 sequence. */
 void sidebar_display_title(const char *title, int max_pixels,
                            char *display, size_t display_size)
 {
@@ -39,6 +42,7 @@ void sidebar_display_title(const char *title, int max_pixels,
         return;
     }
 
+    /* Record valid character boundaries so the ellipsis never splits UTF-8. */
     while (p[bytes] != '\0' && count < sizeof(boundaries) / sizeof(boundaries[0])) {
         size_t n = utf8_sequence_length(p[bytes]);
         size_t j;
@@ -53,6 +57,7 @@ void sidebar_display_title(const char *title, int max_pixels,
         boundaries[count++] = bytes;
     }
 
+    /* Try progressively shorter versions until one fits. */
     for (i = count; i > 0; --i) {
         size_t keep = boundaries[i - 1];
         if (keep + 4 > display_size) continue;
@@ -63,6 +68,7 @@ void sidebar_display_title(const char *title, int max_pixels,
     snprintf(display, display_size, "...");
 }
 
+/* Leave a little horizontal room for XmList's own margins/scrollbar. */
 int sidebar_available_label_width(void)
 {
     Dimension width = 0;
@@ -73,6 +79,7 @@ int sidebar_available_label_width(void)
 
 void select_current_source(void);
 
+/* Rebuild the visible source labels for the sidebar's current width. */
 void refresh_source_labels(void)
 {
     unsigned int i;
@@ -84,6 +91,7 @@ void refresh_source_labels(void)
     max_pixels = sidebar_available_label_width();
     XmListDeleteAllItems(source_list_widget);
     for (i = 0; i < source_count; ++i) {
+        /* Section headings have an empty path and are kept verbatim. */
         if (source_paths[i][0] == '\0')
             snprintf(display, sizeof(display), "%s", source_titles[i]);
         else
@@ -95,6 +103,7 @@ void refresh_source_labels(void)
     select_current_source();
 }
 
+/* Keep sidebar artwork square, with sensible minimum and maximum sizes. */
 unsigned int sidebar_artwork_size_for_width(Dimension width)
 {
     int size = (int)width - 8;
@@ -103,6 +112,7 @@ unsigned int sidebar_artwork_size_for_width(Dimension width)
     return (unsigned int)size;
 }
 
+/* Resize the artwork widget; optionally fetch a new pixmap for that size. */
 void resize_sidebar_artwork(Dimension width, int refresh_pixmap)
 {
     unsigned int size = sidebar_artwork_size_for_width(width);
@@ -115,6 +125,7 @@ void resize_sidebar_artwork(Dimension width, int refresh_pixmap)
     }
 }
 
+/* Draw the little etched divider used as the sidebar resize handle. */
 void sidebar_sizer_expose(Widget widget, XtPointer client_data, XtPointer call_data)
 {
     Display *dpy = XtDisplay(widget);
@@ -149,6 +160,7 @@ void sidebar_sizer_expose(Widget widget, XtPointer client_data, XtPointer call_d
     (void)bg;
 }
 
+/* Handle press/drag/release on the sidebar divider. */
 void sidebar_sizer_event(Widget widget, XtPointer client_data,
                          XEvent *event, Boolean *continue_dispatch)
 {
@@ -157,11 +169,13 @@ void sidebar_sizer_event(Widget widget, XtPointer client_data,
     (void)widget; (void)client_data; (void)continue_dispatch;
 
     if (event->type == ButtonPress && event->xbutton.button == Button1) {
+        /* Remember where the drag started so motion stays relative to that point. */
         sidebar_drag_start_x = event->xbutton.x_root;
         XtVaGetValues(sidebar_frame, XmNwidth, &sidebar_drag_start_width, NULL);
         return;
     }
     if (event->type == ButtonRelease && event->xbutton.button == Button1) {
+        /* Finalize artwork and labels once the user lets go. */
         XtVaGetValues(sidebar_frame, XmNwidth, &width, NULL);
         resize_sidebar_artwork(width, 1);
         refresh_source_labels();
@@ -174,12 +188,15 @@ void sidebar_sizer_event(Widget widget, XtPointer client_data,
     if (next_width < 112) next_width = 112;
     if (next_width > 420) next_width = 420;
     width = (Dimension)next_width;
+
+    /* Keep dragging cheap: geometry and labels update live, artwork refresh waits. */
     XtVaSetValues(sidebar_frame, XmNwidth, width, NULL);
     resize_sidebar_artwork(width, 0);
     XmUpdateDisplay(sidebar_frame);
     refresh_source_labels();
 }
 
+/* Restore the list selection after labels are rebuilt. */
 void select_current_source(void)
 {
     unsigned int i;
@@ -195,6 +212,7 @@ void select_current_source(void)
     }
 }
 
+/* Build the sidebar's fixed sources, then append playlists from the bridge. */
 void populate_sources(void)
 {
     static const char *names[] = {
@@ -209,21 +227,28 @@ void populate_sources(void)
     char response[65536], title[512], id[256], path[512];
     const char *cursor;
     unsigned int i, first = now_playing_source_visible ? 0 : 1;
+
     XmListDeleteAllItems(source_list_widget);
     source_count = 0;
+
+    /* Now Playing is omitted until a current item makes it relevant. */
     for (i = first; i < 7; ++i) {
         snprintf(source_titles[source_count], sizeof(source_titles[0]), "%s", names[i]);
         snprintf(source_paths[source_count], sizeof(source_paths[0]), "%s", paths[i]);
         source_count++;
     }
+
+    /* Empty paths are section headings rather than selectable endpoints. */
     snprintf(source_titles[source_count], sizeof(source_titles[0]), "PLAYLISTS");
     source_paths[source_count][0] = '\0';
     source_count++;
+
     if (bridge_client_request(&bridge, "GET", "/v1/library/playlists", NULL,
                               response, sizeof(response)) != 0) {
         refresh_source_labels();
         return;
     }
+
     cursor = strstr(response, "\"items\"");
     while (cursor && (cursor = strstr(cursor, "\"id\"")) != NULL && source_count < 107) {
         if (!json_string(cursor, "id", id, sizeof(id)) ||

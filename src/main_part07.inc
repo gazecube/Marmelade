@@ -69,23 +69,42 @@ static void position_changed(Widget widget, XtPointer client_data, XtPointer cal
                           response, sizeof(response));
 }
 
-static void toggle_volume_popup(Widget widget, XtPointer client_data, XtPointer call_data)
+static void position_volume_popup(void)
 {
     Position root_x, root_y;
     Dimension button_width, button_height, popup_height;
-    (void)client_data; (void)call_data;
+
+    if (volume_popup == NULL || volume_button == NULL ||
+        !XtIsRealized(volume_button)) return;
+    XtVaGetValues(volume_button,
+                  XmNwidth, &button_width,
+                  XmNheight, &button_height,
+                  NULL);
+    XtVaGetValues(volume_popup, XmNheight, &popup_height, NULL);
+    XtTranslateCoords(volume_button, 0, 0, &root_x, &root_y);
+    XtVaSetValues(volume_popup,
+                  XmNx, root_x + (Position)button_width + 4,
+                  XmNy, root_y - ((Position)popup_height - (Position)button_height) / 2,
+                  NULL);
+}
+
+static void follow_volume_popup(Widget widget, XtPointer client_data,
+                                XEvent *event, Boolean *continue_dispatch)
+{
+    (void)widget; (void)client_data; (void)continue_dispatch;
+    if (!volume_popup_visible || event == NULL || event->type != ConfigureNotify) return;
+    position_volume_popup();
+}
+
+static void toggle_volume_popup(Widget widget, XtPointer client_data, XtPointer call_data)
+{
+    (void)widget; (void)client_data; (void)call_data;
     if (volume_popup_visible) {
         XtPopdown(volume_popup);
         volume_popup_visible = 0;
         return;
     }
-    XtVaGetValues(widget, XmNwidth, &button_width, XmNheight, &button_height, NULL);
-    XtVaGetValues(volume_popup, XmNheight, &popup_height, NULL);
-    XtTranslateCoords(widget, 0, 0, &root_x, &root_y);
-    XtVaSetValues(volume_popup,
-                  XmNx, root_x + (Position)button_width + 4,
-                  XmNy, root_y - ((Position)popup_height - (Position)button_height) / 2,
-                  NULL);
+    position_volume_popup();
     XtPopup(volume_popup, XtGrabNone);
     volume_popup_visible = 1;
 }

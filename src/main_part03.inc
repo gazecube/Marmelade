@@ -198,7 +198,10 @@ static int populate_view(const char *response)
                      (unsigned int)duration % 60);
         snprintf(current_view_labels[count], sizeof(current_view_labels[count]), "%s", line);
         snprintf(current_view_titles[count], sizeof(current_view_titles[count]), "%s", title);
-        snprintf(current_view_artists[count], sizeof(current_view_artists[count]), "%s", artist);
+        if (strcmp(current_view_type, "artists") == 0 || strcmp(item_kind, "artist") == 0)
+            current_view_artists[count][0] = '\0';
+        else
+            snprintf(current_view_artists[count], sizeof(current_view_artists[count]), "%s", artist);
         current_view_durations[count] = duration > 0.0 ? (unsigned int)duration : 0;
         current_view_is_current[count] = is_current;
         current_view_is_autoplay[count] = is_autoplay;

@@ -1,5 +1,9 @@
 #include "app_internal.h"
 
+#define ARTWORK_REFRESH_DELAY_MS 500
+
+static XtIntervalId artwork_refresh_timer = 0;
+
 unsigned long rgb_component_pixel(unsigned char component, unsigned long mask)
 {
     unsigned int shift = 0;
@@ -105,10 +109,26 @@ unavailable:
     XmStringFree(unavailable);
 }
 
+static void refresh_artwork_after_change(XtPointer client_data, XtIntervalId *id)
+{
+    (void)client_data;
+    (void)id;
+    artwork_refresh_timer = 0;
+    update_artwork_widget(artwork_label, sidebar_artwork_size, &artwork_pixmap);
+    update_artwork_widget(main_artwork_label, 240, &main_artwork_pixmap);
+}
+
 void update_artwork(void)
 {
     update_artwork_widget(artwork_label, sidebar_artwork_size, &artwork_pixmap);
     update_artwork_widget(main_artwork_label, 240, &main_artwork_pixmap);
+
+    /* The player state can change a fraction before Apple updates the artwork source. */
+    if (artwork_refresh_timer != 0)
+        XtRemoveTimeOut(artwork_refresh_timer);
+    artwork_refresh_timer = XtAppAddTimeOut(application_context,
+                                             ARTWORK_REFRESH_DELAY_MS,
+                                             refresh_artwork_after_change, NULL);
 }
 
 Pixmap load_album_grid_pixmap(const char *url, unsigned int index)

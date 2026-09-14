@@ -9,8 +9,7 @@
 #include <string.h>
 
 #ifdef MARMELADE_USE_XFT
-static XftFont *primary_font;
-static XftFont *cjk_font;
+static XftFont *fallback_font;
 static Display *font_display;
 static int font_screen = -1;
 
@@ -23,30 +22,18 @@ static unsigned int utf8_length(unsigned char c)
     return 1;
 }
 
-static FcChar32 utf8_codepoint(const unsigned char *text, unsigned int length)
-{
-    if (length == 1) return text[0];
-    if (length == 2)
-        return ((FcChar32)(text[0] & 0x1fu) << 6) |
-               (FcChar32)(text[1] & 0x3fu);
-    if (length == 3)
-        return ((FcChar32)(text[0] & 0x0fu) << 12) |
-               ((FcChar32)(text[1] & 0x3fu) << 6) |
-               (FcChar32)(text[2] & 0x3fu);
-    if (length == 4)
-        return ((FcChar32)(text[0] & 0x07u) << 18) |
-               ((FcChar32)(text[1] & 0x3fu) << 12) |
-               ((FcChar32)(text[2] & 0x3fu) << 6) |
-               (FcChar32)(text[3] & 0x3fu);
-    return text[0];
-}
-
 static XftFont *open_fallback_font(Display *display, int screen)
 {
+    const char *override = getenv("MARMELADE_XFT_FONT");
     FcPattern *pattern;
     FcPattern *match;
     FcCharSet *charset;
     FcResult result;
+
+    if (override != NULL && override[0] != '\0') {
+        XftFont *font = XftFontOpenName(display, screen, override);
+        if (font != NULL) return font;
+    }
 
     pattern = FcPatternCreate();
     charset = FcCharSetCreate();
@@ -56,7 +43,8 @@ static XftFont *open_fallback_font(Display *display, int screen)
         return NULL;
     }
 
-    FcCharSetAddChar(charset, 0x3042); /* Hiragana A: force a Japanese-capable match. */
+    /* Ask Fontconfig for a font that can actually render Japanese. */
+    FcCharSetAddChar(charset, 0x3042);
     FcPatternAddString(pattern, FC_FAMILY, (const FcChar8 *)"sans");
     FcPatternAddCharSet(pattern, FC_CHARSET, charset);
     FcPatternAddDouble(pattern, FC_SIZE, 10.0);
@@ -70,111 +58,139 @@ static XftFont *open_fallback_font(Display *display, int screen)
     return XftFontOpenPattern(display, match);
 }
 
-static void ensure_fonts(Display *display)
+static void ensure_fallback_font(Display *display)
 {
-    const char *font_name;
     int screen;
 
     if (display == NULL) return;
     screen = DefaultScreen(display);
-    if (display == font_display && screen == font_screen && primary_font != NULL)
+    if (display == font_display && screen == font_screen && fallback_font != NULL)
         return;
 
-    if (primary_font != NULL && font_display != NULL)
-        XftFontClose(font_display, primary_font);
-    if (cjk_font != NULL && font_display != NULL)
-        XftFontClose(font_display, cjk_font);
+    if (fallback_font != NULL && font_display != NULL)
+        XftFontClose(font_display, fallback_font);
 
-    primary_font = NULL;
-    cjk_font = NULL;
+    fallback_font = NULL;
     font_display = display;
     font_screen = screen;
-
-    font_name = getenv("MARMELADE_XFT_FONT");
-    if (font_name == NULL || font_name[0] == '\0') font_name = "sans-10";
-    primary_font = XftFontOpenName(display, screen, font_name);
-    if (primary_font == NULL)
-        primary_font = XftFontOpenName(display, screen, "sans-10");
-    cjk_font = open_fallback_font(display, screen);
+    fallback_font = open_fallback_font(display, screen);
 }
 
-static XftFont *font_for_codepoint(Display *display, FcChar32 codepoint)
+static int motif_run_width(XmFontList font_list,
+                           const unsigned char *text, size_t length)
 {
-    if (primary_font != NULL && XftCharExists(display, primary_font, codepoint))
-        return primary_font;
-    if (cjk_font != NULL && XftCharExists(display, cjk_font, codepoint))
-        return cjk_font;
-    return primary_font != NULL ? primary_font : cjk_font;
+    char *copy;
+    XmString string;
+    Dimension width;
+
+    if (font_list == NULL || length == 0) return 0;
+    copy = malloc(length + 1);
+    if (copy == NULL) return 0;
+    memcpy(copy, text, length);
+    copy[length] = '\0';
+    string = XmStringCreateLocalized(copy);
+    free(copy);
+    if (string == NULL) return 0;
+    width = XmStringWidth(font_list, string);
+    XmStringFree(string);
+    return (int)width;
 }
 
-static int utf8_text_width(Display *display, const char *text)
+static int fallback_run_width(Display *display,
+                              const unsigned char *text, size_t length)
+{
+    XGlyphInfo extents;
+    if (fallback_font == NULL || length == 0) return 0;
+    XftTextExtentsUtf8(display, fallback_font, text, (int)length, &extents);
+    return extents.xOff;
+}
+
+static int mixed_text_width(Display *display, XmFontList font_list,
+                            const char *text)
 {
     const unsigned char *cursor = (const unsigned char *)text;
     int width = 0;
 
     while (*cursor != '\0') {
         const unsigned char *run = cursor;
-        XftFont *font;
-        unsigned int run_bytes = 0;
+        size_t run_bytes = 0;
+        int ascii = *cursor < 0x80u;
 
-        {
-            unsigned int n = utf8_length(*cursor);
-            FcChar32 cp = utf8_codepoint(cursor, n);
-            font = font_for_codepoint(display, cp);
-        }
-        if (font == NULL) break;
-
-        while (*cursor != '\0') {
-            unsigned int n = utf8_length(*cursor);
-            FcChar32 cp = utf8_codepoint(cursor, n);
-            if (font_for_codepoint(display, cp) != font) break;
+        while (*cursor != '\0' && ((*cursor < 0x80u) != 0) == ascii) {
+            unsigned int n = ascii ? 1 : utf8_length(*cursor);
             cursor += n;
             run_bytes += n;
         }
 
-        if (run_bytes > 0) {
-            XGlyphInfo extents;
-            XftTextExtentsUtf8(display, font, run, (int)run_bytes, &extents);
-            width += extents.xOff;
-        }
+        if (ascii)
+            width += motif_run_width(font_list, run, run_bytes);
+        else
+            width += fallback_run_width(display, run, run_bytes);
     }
-
     return width;
 }
 
-static void draw_utf8_runs(Display *display, XftDraw *draw, XftColor *color,
-                           const char *text, int x, int baseline)
+static void draw_motif_run(Display *display, Window drawable,
+                           XmFontList font_list, GC gc,
+                           const unsigned char *text, size_t length,
+                           int x, int y, int width,
+                           unsigned char layout_direction,
+                           XRectangle *clip)
+{
+    char *copy;
+    XmString string;
+
+    if (length == 0) return;
+    copy = malloc(length + 1);
+    if (copy == NULL) return;
+    memcpy(copy, text, length);
+    copy[length] = '\0';
+    string = XmStringCreateLocalized(copy);
+    free(copy);
+    if (string == NULL) return;
+    XmStringDraw(display, drawable, font_list, string, gc,
+                 (Position)x, (Position)y, (Dimension)width,
+                 XmALIGNMENT_BEGINNING, layout_direction, clip);
+    XmStringFree(string);
+}
+
+static void draw_mixed_runs(Display *display, Window drawable,
+                            XmFontList font_list, GC gc,
+                            XftDraw *draw, XftColor *color,
+                            const char *text, int x, int y,
+                            int motif_height,
+                            unsigned char layout_direction,
+                            XRectangle *clip)
 {
     const unsigned char *cursor = (const unsigned char *)text;
     int draw_x = x;
 
     while (*cursor != '\0') {
         const unsigned char *run = cursor;
-        XftFont *font;
-        unsigned int run_bytes = 0;
+        size_t run_bytes = 0;
+        int ascii = *cursor < 0x80u;
+        int run_width;
 
-        {
-            unsigned int n = utf8_length(*cursor);
-            FcChar32 cp = utf8_codepoint(cursor, n);
-            font = font_for_codepoint(display, cp);
-        }
-        if (font == NULL) break;
-
-        while (*cursor != '\0') {
-            unsigned int n = utf8_length(*cursor);
-            FcChar32 cp = utf8_codepoint(cursor, n);
-            if (font_for_codepoint(display, cp) != font) break;
+        while (*cursor != '\0' && ((*cursor < 0x80u) != 0) == ascii) {
+            unsigned int n = ascii ? 1 : utf8_length(*cursor);
             cursor += n;
             run_bytes += n;
         }
 
-        if (run_bytes > 0) {
-            XGlyphInfo extents;
-            XftDrawStringUtf8(draw, color, font, draw_x, baseline,
-                              run, (int)run_bytes);
-            XftTextExtentsUtf8(display, font, run, (int)run_bytes, &extents);
-            draw_x += extents.xOff;
+        if (ascii) {
+            run_width = motif_run_width(font_list, run, run_bytes);
+            draw_motif_run(display, drawable, font_list, gc,
+                           run, run_bytes, draw_x, y, run_width,
+                           layout_direction, clip);
+        } else {
+            int baseline;
+            run_width = fallback_run_width(display, run, run_bytes);
+            baseline = y + (motif_height - fallback_font->height) / 2 +
+                       fallback_font->ascent;
+            XftDrawStringUtf8(draw, color, fallback_font,
+                              draw_x, baseline, run, (int)run_bytes);
         }
+        draw_x += run_width;
     }
 }
 #endif
@@ -196,20 +212,34 @@ void marmelade_utf8_string_draw(Display *display, Window drawable,
     XRectangle local_clip;
     int text_width;
     int draw_x;
-    int ascent = 0;
+    int motif_height;
+    int has_non_ascii = 0;
+    const unsigned char *scan;
 
-    (void)font_list;
-    (void)layout_direction;
-
-    ensure_fonts(display);
-    if ((primary_font == NULL && cjk_font == NULL) ||
-        !XmStringGetLtoR(string, XmFONTLIST_DEFAULT_TAG, &text) || text == NULL) {
+    if (!XmStringGetLtoR(string, XmFONTLIST_DEFAULT_TAG, &text) || text == NULL) {
         XmStringDraw(display, drawable, font_list, string, gc, x, y, width,
                      alignment, layout_direction, clip);
         return;
     }
 
-    if (!XGetGCValues(display, gc, GCForeground, &gc_values)) {
+    for (scan = (const unsigned char *)text; *scan != '\0'; ++scan) {
+        if (*scan >= 0x80u) {
+            has_non_ascii = 1;
+            break;
+        }
+    }
+
+    /* Keep normal Motif text completely native. Xft only fills Unicode gaps. */
+    if (!has_non_ascii) {
+        XtFree(text);
+        XmStringDraw(display, drawable, font_list, string, gc, x, y, width,
+                     alignment, layout_direction, clip);
+        return;
+    }
+
+    ensure_fallback_font(display);
+    if (fallback_font == NULL ||
+        !XGetGCValues(display, gc, GCForeground, &gc_values)) {
         XtFree(text);
         XmStringDraw(display, drawable, font_list, string, gc, x, y, width,
                      alignment, layout_direction, clip);
@@ -235,29 +265,26 @@ void marmelade_utf8_string_draw(Display *display, Window drawable,
         return;
     }
 
-    text_width = utf8_text_width(display, text);
+    text_width = mixed_text_width(display, font_list, text);
     draw_x = (int)x;
     if (alignment == XmALIGNMENT_CENTER)
         draw_x += ((int)width - text_width) / 2;
     else if (alignment == XmALIGNMENT_END)
         draw_x += (int)width - text_width;
 
-    if (primary_font != NULL && primary_font->ascent > ascent)
-        ascent = primary_font->ascent;
-    if (cjk_font != NULL && cjk_font->ascent > ascent)
-        ascent = cjk_font->ascent;
+    motif_height = (int)XmStringHeight(font_list, string);
+    if (motif_height <= 0) motif_height = fallback_font->height;
 
     local_clip.x = x;
     local_clip.y = y;
     local_clip.width = width;
-    local_clip.height = (unsigned short)((primary_font != NULL ? primary_font->height : 0) >
-                                         (cjk_font != NULL ? cjk_font->height : 0) ?
-                                         (primary_font != NULL ? primary_font->height : 0) :
-                                         (cjk_font != NULL ? cjk_font->height : 0));
-    if (local_clip.height == 0) local_clip.height = 32;
+    local_clip.height = (unsigned short)(motif_height > fallback_font->height ?
+                                         motif_height : fallback_font->height);
     XftDrawSetClipRectangles(draw, 0, 0, clip != NULL ? clip : &local_clip, 1);
 
-    draw_utf8_runs(display, draw, &color, text, draw_x, (int)y + ascent);
+    draw_mixed_runs(display, drawable, font_list, gc, draw, &color,
+                    text, draw_x, (int)y, motif_height,
+                    layout_direction, clip);
 
     XftDrawDestroy(draw);
     XtFree(text);

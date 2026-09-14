@@ -76,10 +76,10 @@ make check
 Useful runtime overrides:
 
 ```sh
-MOTIF_APPLE_MUSIC_MANAGE_BRIDGE=0 ./motif-apple-music
-MOTIF_APPLE_MUSIC_BRIDGE_URL=http://127.0.0.1:17876 ./motif-apple-music
-MOTIF_APPLE_MUSIC_NODE=/path/to/node ./motif-apple-music
-MOTIF_APPLE_MUSIC_CHROMIUM=/path/to/chromium ./motif-apple-music
+MOTIF_APPLE_MUSIC_MANAGE_BRIDGE=0 ./marmelade
+MOTIF_APPLE_MUSIC_BRIDGE_URL=http://127.0.0.1:17876 ./marmelade
+MOTIF_APPLE_MUSIC_NODE=/path/to/node ./marmelade
+MOTIF_APPLE_MUSIC_CHROMIUM=/path/to/chromium ./marmelade
 ```
 
 ## About the login process

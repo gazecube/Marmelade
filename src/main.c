@@ -38,7 +38,7 @@ int main(int argc, char **argv)
                                             XmNsubMenuId, file_menu, NULL);
     (void)file_cascade;
     XmStringFree(label);
-    XtAddCallback(XtVaCreateManagedWidget("Show Apple Music Login...",
+    XtAddCallback(XtVaCreateManagedWidget("Log In",
                                            xmPushButtonWidgetClass, file_menu, NULL),
                   XmNactivateCallback, authorize_music, NULL);
     XtVaCreateManagedWidget("separator", xmSeparatorGadgetClass, file_menu, NULL);

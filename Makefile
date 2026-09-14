@@ -14,7 +14,7 @@ ifeq ($(strip $(XPM_LIBS)),)
 XPM_LIBS := -lXpm
 endif
 
-TARGET := motif-apple-music
+TARGET := marmelade
 VERSION := $(shell sed -n '1p' VERSION)
 SOURCES := src/main.c src/app_state.c src/json.c src/ui_icons.c src/icons.c src/browser.c src/sidebar.c src/view.c src/artwork.c src/grid.c src/player.c src/bridge_client.c
 OBJECTS := $(SOURCES:.c=.o)

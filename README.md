@@ -6,7 +6,7 @@ This project *was* made primarily using ChatGPT, since writing this kind of thin
 
 An unofficial Apple Music client that uses the Motif Widget Toolkit, built primarily for GNU/Linux and intended to be platform-agnostic.
 
-Current development version: `0.2.0-DEV-22.3`
+Current development version: `0.22.0`
 
 Marmelade keeps the visible application native Xt/Motif. A small local Node.js bridge controls a dedicated Chromium Apple Music session and exposes playback, library, queue, artwork, and account state to the C frontend over a loopback-only HTTP protocol.
 

@@ -181,27 +181,6 @@ void position_volume_popup(void)
                   NULL);
 }
 
-static int window_is_inside_volume_popup(Display *display, Window window)
-{
-    Window popup_window;
-
-    if (volume_popup == NULL || !XtIsRealized(volume_popup) || window == None)
-        return 0;
-    popup_window = XtWindow(volume_popup);
-    while (window != None && window != PointerRoot) {
-        Window root, parent, *children = NULL;
-        unsigned int child_count = 0;
-
-        if (window == popup_window) return 1;
-        if (!XQueryTree(display, window, &root, &parent, &children, &child_count))
-            break;
-        if (children != NULL) XFree(children);
-        if (parent == window) break;
-        window = parent;
-    }
-    return 0;
-}
-
 void follow_volume_popup(Widget widget, XtPointer client_data,
                          XEvent *event, Boolean *continue_dispatch)
 {
@@ -209,13 +188,6 @@ void follow_volume_popup(Widget widget, XtPointer client_data,
     if (!volume_popup_visible || event == NULL) return;
     if (event->type == ConfigureNotify) {
         position_volume_popup();
-    } else if (event->type == FocusOut) {
-        Window focus = None;
-        int revert_to;
-        XGetInputFocus(XtDisplay(widget), &focus, &revert_to);
-        if (window_is_inside_volume_popup(XtDisplay(widget), focus)) return;
-        XtPopdown(volume_popup);
-        volume_popup_visible = 0;
     } else if (event->type == UnmapNotify) {
         XtPopdown(volume_popup);
         volume_popup_visible = 0;

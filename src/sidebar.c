@@ -319,12 +319,20 @@ void resize_sidebar_artwork(Dimension width, int refresh_pixmap)
 {
     unsigned int size = sidebar_artwork_size_for_width(width);
     if (artwork_label == NULL) return;
-    XtVaSetValues(artwork_label, XmNwidth, size, XmNheight, size, NULL);
-    if (size != sidebar_artwork_size) {
+
+    /* A pixmap label otherwise tries to snap back to the pixmap's preferred size. */
+    XtVaSetValues(artwork_label,
+                  XmNrecomputeSize, False,
+                  XmNwidth, size,
+                  XmNheight, size,
+                  NULL);
+
+    if (size != sidebar_artwork_size)
         sidebar_artwork_size = size;
-        if (refresh_pixmap && now_playing_source_visible)
-            update_artwork_widget(artwork_label, size, &artwork_pixmap);
-    }
+
+    /* Motion updates geometry only; release always fetches a correctly-sized pixmap. */
+    if (refresh_pixmap && now_playing_source_visible)
+        update_artwork_widget(artwork_label, size, &artwork_pixmap);
 }
 
 void sidebar_sizer_expose(Widget widget, XtPointer client_data, XtPointer call_data)

@@ -1,6 +1,6 @@
 
 ### DISCLAIMER
-This project *was* made primarily using ChatGPT, since writing this kind of thing is outside of my skillset, however I *do* work on UI elements and give genuine feedback during the process, like the AutoPlay, Shuffle, AutoMix, and Repeat pixmaps, and padding around items. I also explicitly *despise" AI Image Generation, instead opting for using the toolkit itself, and creating assets by hand when something genuinely needs a raster/SVG image.  
+This project *was* made primarily using ChatGPT, since writing this kind of thing is outside of my skillset, however I *do* work on UI elements and give genuine feedback during the process, like the AutoPlay, Shuffle, AutoMix, and Repeat pixmaps, and padding around items. I also explicitly **despise** AI Image Generation, instead opting for using the toolkit itself, and creating assets by hand when something genuinely needs a raster/SVG image.  
 
 # Marmelade
 
@@ -42,7 +42,7 @@ To build the native frontend, you will need
 - Motif development headers and libraries
 - X11 and Xt development headers and libraries
 - Xpm
-- pkg-config` is recommended but not required
+- pkg-config is recommended but not required
 
 
 

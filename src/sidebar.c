@@ -1,5 +1,6 @@
+#include "app_internal.h"
 
-static size_t utf8_sequence_length(unsigned char c)
+size_t utf8_sequence_length(unsigned char c)
 {
     if ((c & 0x80u) == 0) return 1;
     if ((c & 0xe0u) == 0xc0u) return 2;
@@ -8,7 +9,7 @@ static size_t utf8_sequence_length(unsigned char c)
     return 1;
 }
 
-static int sidebar_text_width(const char *text)
+int sidebar_text_width(const char *text)
 {
     XmFontList font_list = NULL;
     XmString value;
@@ -23,8 +24,8 @@ static int sidebar_text_width(const char *text)
     return (int)width;
 }
 
-static void sidebar_display_title(const char *title, int max_pixels,
-                                  char *display, size_t display_size)
+void sidebar_display_title(const char *title, int max_pixels,
+                           char *display, size_t display_size)
 {
     const unsigned char *p = (const unsigned char *)title;
     size_t boundaries[512];
@@ -62,7 +63,7 @@ static void sidebar_display_title(const char *title, int max_pixels,
     snprintf(display, display_size, "...");
 }
 
-static int sidebar_available_label_width(void)
+int sidebar_available_label_width(void)
 {
     Dimension width = 0;
     if (source_list_widget == NULL) return 140;
@@ -70,9 +71,9 @@ static int sidebar_available_label_width(void)
     return width > 24 ? (int)width - 24 : 1;
 }
 
-static void select_current_source(void);
+void select_current_source(void);
 
-static void refresh_source_labels(void)
+void refresh_source_labels(void)
 {
     unsigned int i;
     int max_pixels;
@@ -94,7 +95,7 @@ static void refresh_source_labels(void)
     select_current_source();
 }
 
-static unsigned int sidebar_artwork_size_for_width(Dimension width)
+unsigned int sidebar_artwork_size_for_width(Dimension width)
 {
     int size = (int)width - 8;
     if (size < 96) size = 96;
@@ -102,7 +103,7 @@ static unsigned int sidebar_artwork_size_for_width(Dimension width)
     return (unsigned int)size;
 }
 
-static void resize_sidebar_artwork(Dimension width, int refresh_pixmap)
+void resize_sidebar_artwork(Dimension width, int refresh_pixmap)
 {
     unsigned int size = sidebar_artwork_size_for_width(width);
     if (artwork_label == NULL) return;
@@ -114,8 +115,7 @@ static void resize_sidebar_artwork(Dimension width, int refresh_pixmap)
     }
 }
 
-
-static void sidebar_sizer_expose(Widget widget, XtPointer client_data, XtPointer call_data)
+void sidebar_sizer_expose(Widget widget, XtPointer client_data, XtPointer call_data)
 {
     Display *dpy = XtDisplay(widget);
     Window win = XtWindow(widget);
@@ -149,8 +149,8 @@ static void sidebar_sizer_expose(Widget widget, XtPointer client_data, XtPointer
     (void)bg;
 }
 
-static void sidebar_sizer_event(Widget widget, XtPointer client_data,
-                                XEvent *event, Boolean *continue_dispatch)
+void sidebar_sizer_event(Widget widget, XtPointer client_data,
+                         XEvent *event, Boolean *continue_dispatch)
 {
     Dimension width;
     int next_width;
@@ -180,7 +180,7 @@ static void sidebar_sizer_event(Widget widget, XtPointer client_data,
     refresh_source_labels();
 }
 
-static void select_current_source(void)
+void select_current_source(void)
 {
     unsigned int i;
     const char *wanted = (browser_mode == 2 ||
@@ -195,7 +195,7 @@ static void select_current_source(void)
     }
 }
 
-static void populate_sources(void)
+void populate_sources(void)
 {
     static const char *names[] = {
         "Now Playing", "Listen Now", "Recently Played", "Albums",
@@ -236,93 +236,3 @@ static void populate_sources(void)
     }
     refresh_source_labels();
 }
-
-static void view_model_selected(unsigned int index)
-{
-    const char *plural;
-    if (index >= current_view_count) return;
-    set_browser_selection((int)index);
-    if (current_view_container_rows[index]) {
-        current_view_collapsed = !current_view_collapsed;
-        current_view_labels[index][1] = current_view_collapsed ? '+' : '-';
-        apply_filter(current_filter);
-        return;
-    }
-    if (strcmp(current_view_item_kinds[index], "album") != 0 &&
-        strcmp(current_view_item_kinds[index], "playlist") != 0 &&
-        strcmp(current_view_item_kinds[index], "artist") != 0) return;
-    plural = strcmp(current_view_item_kinds[index], "artist") == 0 ? "artists" :
-             (strcmp(current_view_item_kinds[index], "album") == 0 ? "albums" : "playlists");
-    snprintf(current_view_path, sizeof(current_view_path), "/v1/library/%s/%s",
-             plural, current_view_ids[index]);
-    load_view(current_view_path);
-}
-
-static void view_model_opened(unsigned int index)
-{
-    char body[640], response[2048];
-    if (index >= current_view_count) return;
-    if (strcmp(current_view_type, "albums") == 0 ||
-        strcmp(current_view_type, "artists") == 0 ||
-        strcmp(current_view_type, "playlists") == 0) {
-        snprintf(current_view_path, sizeof(current_view_path), "/v1/library/%s/%s",
-                 current_view_type, current_view_ids[index]);
-        load_view(current_view_path);
-    } else if (strcmp(current_view_item_kinds[index], "song") == 0 ||
-               strcmp(current_view_item_kinds[index], "album") == 0 ||
-               strcmp(current_view_item_kinds[index], "playlist") == 0 ||
-               strcmp(current_view_item_kinds[index], "station") == 0) {
-        snprintf(body, sizeof(body), "{\"kind\":\"%s\",\"id\":\"%s\"}",
-                 current_view_item_kinds[index], current_view_catalog_ids[index]);
-        if (bridge_client_request(&bridge, "POST", "/v1/player/queue", body,
-                                  response, sizeof(response)) == 0) {
-            set_status("Starting selected Apple Music item...");
-            snprintf(current_view_path, sizeof(current_view_path), "%s", "/v1/player/queue");
-            load_view(current_view_path);
-        } else
-            set_status("Could not play the selected Apple Music item");
-    }
-}
-
-
-static void browser_list_event(Widget widget, XtPointer client_data,
-                               XEvent *event, Boolean *continue_dispatch)
-{
-    Dimension width = 0;
-    int queue_view;
-    (void)client_data; (void)continue_dispatch;
-
-    if (event->type == ConfigureNotify) {
-        if (widget == browser_list_scroller || widget == browser_list_canvas)
-            schedule_browser_resize_redraw();
-        return;
-    }
-    if (widget != browser_list_canvas) return;
-    if (event->type == Expose) {
-        draw_browser_list(&event->xexpose);
-        return;
-    }
-    if (event->type != ButtonPress || event->xbutton.button != Button1) return;
-
-    queue_view = browser_mode == 0 && strcmp(current_view_path, "/v1/player/queue") == 0;
-    if (event->xbutton.y < LIST_TITLE_HEIGHT) {
-        if (queue_view) {
-            int autoplay_x, automix_x, repeat_x, shuffle_x;
-            XtVaGetValues(browser_list_canvas, XmNwidth, &width, NULL);
-            autoplay_x = (int)width - LIST_SIDE_PAD - LIST_SMALL_ICON_SIZE;
-            automix_x = autoplay_x - LIST_ICON_GAP - LIST_SMALL_ICON_SIZE;
-            repeat_x = automix_x - LIST_ICON_GAP - LIST_ICON_SIZE;
-            shuffle_x = repeat_x - LIST_ICON_GAP - LIST_ICON_SIZE;
-            if (event->xbutton.x >= autoplay_x &&
-                event->xbutton.x < autoplay_x + LIST_SMALL_ICON_SIZE) {
-                autoplay_toggled(widget, NULL, NULL);
-            } else if (event->xbutton.x >= automix_x &&
-                       event->xbutton.x < automix_x + LIST_SMALL_ICON_SIZE) {
-                automix_toggled(widget, NULL, NULL);
-            } else if (event->xbutton.x >= repeat_x &&
-                       event->xbutton.x < repeat_x + LIST_ICON_SIZE) {
-                repeat_toggled(widget, NULL, NULL);
-            } else if (event->xbutton.x >= shuffle_x &&
-                       event->xbutton.x < shuffle_x + LIST_ICON_SIZE) {
-                shuffle_toggled(widget, NULL, NULL);
-            }

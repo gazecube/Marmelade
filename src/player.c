@@ -1,3 +1,96 @@
+#include "app_internal.h"
+#include "icons.h"
+
+void poll_player(XtPointer client_data, XtIntervalId *timer_id);
+
+void repaint_position_scale(int percent)
+{
+    if (position_scale == NULL || !XtIsRealized(position_scale)) return;
+    if (percent == prior_position_percent) return;
+    prior_position_percent = percent;
+    XmScaleSetValue(position_scale, percent);
+    XClearArea(XtDisplay(position_scale), XtWindow(position_scale),
+               0, 0, 0, 0, True);
+    XmUpdateDisplay(position_scale);
+}
+
+void schedule_player_poll(unsigned long delay_ms)
+{
+    if (player_poll_timer != (XtIntervalId)0) return;
+    player_poll_timer = XtAppAddTimeOut(application_context, delay_ms,
+                                        poll_player, NULL);
+}
+
+void poll_player(XtPointer client_data, XtIntervalId *timer_id)
+{
+    char status[1024], player[4096], mode[96], playback[96] = "unavailable";
+    char title[512] = "", artist[512] = "", message[1152];
+    char track_id[256] = "", artwork_key[1024];
+    static char prior_artwork_key[1024];
+    double position = 0.0, duration = 0.0, player_volume = 0.6;
+    int logged_in = 0, percent = 0;
+    (void)client_data; (void)timer_id;
+    player_poll_timer = (XtIntervalId)0;
+
+    if (bridge_client_request(&bridge, "GET", "/v1/status", NULL,
+                              status, sizeof(status)) != 0) {
+        set_status("Apple Music bridge unavailable");
+        goto schedule;
+    }
+    if (json_string(status, "mode", mode, sizeof(mode)) &&
+        strcmp(mode, "ready") != 0) {
+        if (strcmp(mode, "needs_login") == 0)
+            set_status("Sign into Apple Music: File -> Show Apple Music Login...");
+        else if (strcmp(mode, "starting_browser") == 0)
+            set_status("Starting Apple Music browser engine...");
+        else
+            set_status(mode);
+        goto schedule;
+    }
+    if (bridge_client_request(&bridge, "GET", "/v1/player/state", NULL,
+                              player, sizeof(player)) != 0) {
+        set_status("Could not read Apple Music player state");
+        goto schedule;
+    }
+    json_boolean(player, "loggedIn", &logged_in);
+    if (!logged_in) {
+        set_status("Sign into Apple Music: File -> Show Apple Music Login...");
+        goto schedule;
+    }
+    json_string(player, "playback", playback, sizeof(playback));
+    json_string(player, "title", title, sizeof(title));
+    json_string(player, "artist", artist, sizeof(artist));
+    json_string(player, "id", track_id, sizeof(track_id));
+    json_number(player, "position", &position);
+    json_number(player, "duration", &duration);
+    json_number(player, "volume", &player_volume);
+    json_boolean(player, "shuffleEnabled", &player_shuffle_enabled);
+    json_boolean(player, "automixEnabled", &player_automix_enabled);
+    json_boolean(player, "autoplayEnabled", &player_autoplay_enabled);
+    {
+        char repeat_mode[32] = "off";
+        if (json_string(player, "repeatMode", repeat_mode, sizeof(repeat_mode))) {
+            if (strcmp(repeat_mode, "one") == 0) player_repeat_mode = 2;
+            else if (strcmp(repeat_mode, "all") == 0) player_repeat_mode = 1;
+            else player_repeat_mode = 0;
+        }
+    }
+    {
+        int has_current_item = track_id[0] != '\0' || title[0] != '\0';
+        if (has_current_item != now_playing_source_visible) {
+            now_playing_source_visible = has_current_item;
+            if (!has_current_item &&
+                (browser_mode == 2 || strcmp(current_view_path, "/v1/player/queue") == 0)) {
+                browser_mode = 0;
+                snprintf(current_view_path, sizeof(current_view_path), "%s", "/v1/listen-now");
+                XtUnmanageChild(album_grid_scroller);
+                XtUnmanageChild(main_artwork_label);
+                XtManageChild(browser_widget);
+                load_view(current_view_path);
+            }
+            populate_sources();
+        }
+    }
     player_duration = duration;
     if (duration > 0.0) percent = (int)((position / duration) * 100.0);
     if (percent < 0) percent = 0;
@@ -31,7 +124,7 @@ schedule:
     schedule_player_poll(1000);
 }
 
-static void player_action(Widget widget, XtPointer client_data, XtPointer call_data)
+void player_action(Widget widget, XtPointer client_data, XtPointer call_data)
 {
     const char *action = (const char *)client_data;
     char path[128], response[2048];
@@ -45,7 +138,7 @@ static void player_action(Widget widget, XtPointer client_data, XtPointer call_d
         set_status("Bridge request failed");
 }
 
-static void volume_changed(Widget widget, XtPointer client_data, XtPointer call_data)
+void volume_changed(Widget widget, XtPointer client_data, XtPointer call_data)
 {
     XmScaleCallbackStruct *scale = (XmScaleCallbackStruct *)call_data;
     char body[64], response[1024];
@@ -57,7 +150,7 @@ static void volume_changed(Widget widget, XtPointer client_data, XtPointer call_
         set_status("Volume update failed");
 }
 
-static void position_changed(Widget widget, XtPointer client_data, XtPointer call_data)
+void position_changed(Widget widget, XtPointer client_data, XtPointer call_data)
 {
     XmScaleCallbackStruct *scale = (XmScaleCallbackStruct *)call_data;
     char body[96], response[1024];
@@ -69,7 +162,7 @@ static void position_changed(Widget widget, XtPointer client_data, XtPointer cal
                           response, sizeof(response));
 }
 
-static void position_volume_popup(void)
+void position_volume_popup(void)
 {
     Position root_x, root_y;
     Dimension button_width, button_height, popup_height;
@@ -88,22 +181,20 @@ static void position_volume_popup(void)
                   NULL);
 }
 
-static void follow_volume_popup(Widget widget, XtPointer client_data,
-                                XEvent *event, Boolean *continue_dispatch)
+void follow_volume_popup(Widget widget, XtPointer client_data,
+                         XEvent *event, Boolean *continue_dispatch)
 {
     (void)widget; (void)client_data; (void)continue_dispatch;
     if (!volume_popup_visible || event == NULL) return;
     if (event->type == ConfigureNotify) {
         position_volume_popup();
-        return;
-    }
-    if (event->type == FocusOut || event->type == UnmapNotify) {
+    } else if (event->type == FocusOut || event->type == UnmapNotify) {
         XtPopdown(volume_popup);
         volume_popup_visible = 0;
     }
 }
 
-static void toggle_volume_popup(Widget widget, XtPointer client_data, XtPointer call_data)
+void toggle_volume_popup(Widget widget, XtPointer client_data, XtPointer call_data)
 {
     (void)widget; (void)client_data; (void)call_data;
     if (volume_popup_visible) {
@@ -116,8 +207,8 @@ static void toggle_volume_popup(Widget widget, XtPointer client_data, XtPointer 
     volume_popup_visible = 1;
 }
 
-static void dismiss_volume_popup(Widget widget, XtPointer client_data,
-                                 XEvent *event, Boolean *continue_dispatch)
+void dismiss_volume_popup(Widget widget, XtPointer client_data,
+                          XEvent *event, Boolean *continue_dispatch)
 {
     (void)widget; (void)client_data; (void)event; (void)continue_dispatch;
     if (!volume_popup_visible) return;
@@ -125,8 +216,8 @@ static void dismiss_volume_popup(Widget widget, XtPointer client_data,
     volume_popup_visible = 0;
 }
 
-static Widget icon_button(Widget parent, const char *name, const char *action,
-                          char **xpm)
+Widget icon_button(Widget parent, const char *name, const char *action,
+                   char **xpm)
 {
     Widget result = XtVaCreateManagedWidget(name, xmPushButtonWidgetClass, parent, NULL);
     Pixmap pixmap = make_button_pixmap(result, xpm);
@@ -143,7 +234,7 @@ static Widget icon_button(Widget parent, const char *name, const char *action,
     return result;
 }
 
-static Widget popup_icon_button(Widget parent, const char *name, char **xpm)
+Widget popup_icon_button(Widget parent, const char *name, char **xpm)
 {
     Widget result = XtVaCreateManagedWidget(name, xmPushButtonWidgetClass, parent, NULL);
     Pixmap pixmap = make_button_pixmap(result, xpm);
@@ -158,13 +249,13 @@ static Widget popup_icon_button(Widget parent, const char *name, char **xpm)
     return result;
 }
 
-static void play_pause_action(Widget widget, XtPointer client_data, XtPointer call_data)
+void play_pause_action(Widget widget, XtPointer client_data, XtPointer call_data)
 {
     (void)client_data;
     player_action(widget, (XtPointer)(player_is_playing ? "pause" : "play"), call_data);
 }
 
-static Widget play_pause_icon_button(Widget parent)
+Widget play_pause_icon_button(Widget parent)
 {
     Widget result = XtVaCreateManagedWidget("playPause", xmPushButtonWidgetClass,
                                              parent, NULL);
@@ -181,7 +272,7 @@ static Widget play_pause_icon_button(Widget parent)
     return result;
 }
 
-static void shuffle_toggled(Widget widget, XtPointer client_data, XtPointer call_data)
+void shuffle_toggled(Widget widget, XtPointer client_data, XtPointer call_data)
 {
     char body[64], response[2048];
     (void)widget; (void)client_data; (void)call_data;
@@ -196,7 +287,7 @@ static void shuffle_toggled(Widget widget, XtPointer client_data, XtPointer call
         set_status("Could not update shuffle state");
 }
 
-static void repeat_toggled(Widget widget, XtPointer client_data, XtPointer call_data)
+void repeat_toggled(Widget widget, XtPointer client_data, XtPointer call_data)
 {
     char body[64], response[2048];
     int next_mode = (player_repeat_mode + 1) % 3;
@@ -213,8 +304,7 @@ static void repeat_toggled(Widget widget, XtPointer client_data, XtPointer call_
         set_status("Could not update repeat state");
 }
 
-
-static void automix_toggled(Widget widget, XtPointer client_data, XtPointer call_data)
+void automix_toggled(Widget widget, XtPointer client_data, XtPointer call_data)
 {
     char body[64], response[2048];
     (void)widget; (void)client_data; (void)call_data;
@@ -229,7 +319,7 @@ static void automix_toggled(Widget widget, XtPointer client_data, XtPointer call
         set_status("Could not update AutoMix state");
 }
 
-static void autoplay_toggled(Widget widget, XtPointer client_data, XtPointer call_data)
+void autoplay_toggled(Widget widget, XtPointer client_data, XtPointer call_data)
 {
     char body[64], response[2048];
     (void)widget; (void)client_data; (void)call_data;
@@ -244,9 +334,7 @@ static void autoplay_toggled(Widget widget, XtPointer client_data, XtPointer cal
         set_status("Could not update Autoplay state");
 }
 
-
-
-static void shutdown_app(Widget widget, XtPointer client_data, XtPointer call_data)
+void shutdown_app(Widget widget, XtPointer client_data, XtPointer call_data)
 {
     char response[256];
     (void)widget; (void)client_data; (void)call_data;
@@ -258,8 +346,7 @@ static void shutdown_app(Widget widget, XtPointer client_data, XtPointer call_da
     exit(0);
 }
 
-
-static int command_available(const char *program)
+int command_available(const char *program)
 {
     const char *path = getenv("PATH");
     const char *start, *end;
@@ -285,7 +372,7 @@ static int command_available(const char *program)
     return 0;
 }
 
-static void show_fatal_startup_error(const char *message)
+void show_fatal_startup_error(const char *message)
 {
     pid_t pid;
 
@@ -307,7 +394,7 @@ static void show_fatal_startup_error(const char *message)
     _exit(127);
 }
 
-static void authorize_music(Widget widget, XtPointer client_data, XtPointer call_data)
+void authorize_music(Widget widget, XtPointer client_data, XtPointer call_data)
 {
     char response[512];
     (void)widget; (void)client_data; (void)call_data;
@@ -317,32 +404,3 @@ static void authorize_music(Widget widget, XtPointer client_data, XtPointer call
     else
         set_status("Sign into Apple Music in the browser window");
 }
-
-int main(int argc, char **argv)
-{
-    XtAppContext app;
-    Widget shell, main_window, form, menu_bar, file_menu, file_cascade;
-    Widget view_menu, view_cascade, toggle;
-    Widget content, sources, right_pane, browser, transport, search, volume;
-    Widget library_heading;
-    Widget volume_frame;
-    XmString label;
-    unsigned int i;
-    int bridge_start_result;
-    static const char *demo_tracks[] = {
-        "Cats on Mars                 SEATBELTS                 2:44",
-        "Demo library is active       Motif Apple Music         --:--",
-        "Configure MusicKit to load   Your Apple Music library  --:--",
-        "Search and playback arrive   In the next milestone     --:--"
-    };
-
-    XtSetLanguageProc(NULL, NULL, NULL);
-    shell = XtVaAppInitialize(&app, "MotifAppleMusic", NULL, 0, &argc, argv,
-                              NULL, XmNtitle, "Apple Music", NULL);
-    application_context = app;
-    XtVaSetValues(shell, XmNwidth, 940, XmNheight, 620, NULL);
-    XtAddCallback(shell, XmNdestroyCallback, shutdown_app, NULL);
-    {
-        Atom wm_delete = XmInternAtom(XtDisplay(shell), "WM_DELETE_WINDOW", False);
-        XmAddWMProtocolCallback(shell, wm_delete, shutdown_app, NULL);
-    }

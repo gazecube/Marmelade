@@ -56,6 +56,8 @@
     XtAddEventHandler(browser_list_canvas, ButtonPressMask, False, dismiss_volume_popup, NULL);
     XtAddEventHandler(position_scale, ButtonPressMask, False, dismiss_volume_popup, NULL);
     XtAddEventHandler(transport, ButtonPressMask, False, dismiss_volume_popup, NULL);
+    XtAddEventHandler(shell, StructureNotifyMask | FocusChangeMask, False,
+                      follow_volume_popup, NULL);
     XmMainWindowSetAreas(main_window, menu_bar, NULL, NULL, NULL, form);
 
     bridge_client_init(&bridge);

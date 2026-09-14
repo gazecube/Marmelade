@@ -1,3 +1,7 @@
+
+### DISCLAIMER
+This project *was* made primarily using ChatGPT, since writing this kind of thing is outside of my skillset, however I *do* work on UI elements and give genuine feedback during the process, like the AutoPlay, Shuffle, AutoMix, and Repeat pixmaps, and padding around items. I also explicitly *despise" AI Image Generation, instead opting for using the toolkit itself, and creating assets by hand when something genuinely needs a raster/SVG image.  
+
 # Marmelade
 
 An unofficial Apple Music client that uses the Motif Widget Toolkit, built primarily for GNU/Linux and intended to be platform-agnostic.
@@ -20,6 +24,13 @@ Marmelade keeps the visible application native Xt/Motif. A small local Node.js b
 - Locally-documented bridge protocol so the browser backend can be replaced without rewriting the Motif frontend.
 
 ## Platform status
+
+Linux is the main development platform, and currently works perfectly.
+*BSD currently is untested.
+macOS is currently untested, likely will not work, as I am not aware of anyone actively using Motif apps on the platform.
+Windows is unsupported, and likely will never be supported, as it has no Motif implementation that I'm aware of, and has been going downhill since 2012 at *least*.
+
+HaikuOS will likely get its' own frontend down the line, since it lacks a good GUI music-streaming application.
 
 GNU/Linux is the primary tested platform. The native side is written against C99/POSIX, Xt, Motif, X11, and Xpm rather than a Linux-specific GUI stack. Other UNIX-like systems are an intended target, but BSD compatibility has not yet been verified.
 

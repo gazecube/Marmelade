@@ -1,3 +1,94 @@
 # Marmelade
 
-This is Marmelade, an unofficial Apple Music client built with node.JS and Chromium for the backend, and C/Motif for the frontend!
+An unofficial Apple Music client that uses the Motif Widget Toolkit, built primarily for GNU/Linux and intended to be platform-agnostic.
+
+Current development version: `0.2.0-DEV-22.3`
+
+Marmelade keeps the visible application native Xt/Motif. A small local Node.js bridge controls a dedicated Chromium Apple Music session and exposes playback, library, queue, artwork, and account state to the C frontend over a loopback-only HTTP protocol.
+
+## Current features
+
+- Native Xt/Motif interface with SGI/MaXX scheme support.
+- Listen Now, Recently Played, Songs, Albums, Artists, Playlists, Radio, and search.
+- Native list and responsive album-grid views.
+- Full-color album artwork rendered as native X11 pixmaps.
+- Persistent Apple Music login through a dedicated Chromium profile.
+- Play/pause, previous/next, seek, volume, Shuffle, Repeat, AutoMix, and Autoplay controls.
+- Live Up Next queue with Apple Music autoplay additions.
+- Resizable iTunes-style sidebar with artwork.
+- Damage-limited custom list rendering and lazy artwork/list loading.
+- Local documented bridge protocol so the browser backend can be replaced without rewriting the Motif frontend.
+
+## Platform status
+
+GNU/Linux is the primary tested platform. The native side is written against C99/POSIX, Xt, Motif, X11, and Xpm rather than a Linux-specific GUI stack. Other UNIX-like systems are an intended target, but BSD compatibility has not yet been verified.
+
+## Requirements
+
+To build the native frontend:
+
+- C99 compiler
+- Motif development headers and libraries
+- X11 and Xt development headers and libraries
+- Xpm
+- `pkg-config` is recommended but not required
+
+To use the Apple Music bridge:
+
+- Node.js 20 or newer
+- Chromium or a compatible Chromium-based browser
+- A normal Apple Music account
+
+Node.js is a hard runtime requirement when Marmelade is managing its own bridge. If it cannot be executed, the application reports a fatal startup error and exits before entering the Xt main loop.
+
+## Build
+
+```sh
+make
+make run
+```
+
+Run the bridge by itself:
+
+```sh
+make bridge
+```
+
+Run the bridge and client checks:
+
+```sh
+make check
+```
+
+Useful runtime overrides:
+
+```sh
+MOTIF_APPLE_MUSIC_MANAGE_BRIDGE=0 ./motif-apple-music
+MOTIF_APPLE_MUSIC_BRIDGE_URL=http://127.0.0.1:17876 ./motif-apple-music
+MOTIF_APPLE_MUSIC_NODE=/path/to/node ./motif-apple-music
+MOTIF_APPLE_MUSIC_CHROMIUM=/path/to/chromium ./motif-apple-music
+```
+
+## Apple Music login
+
+The bridge normally runs Chromium headlessly. Use `File -> Show Apple Music Login...` to bring up the persistent browser profile and sign in at Apple Music. The profile is stored under:
+
+```text
+~/.local/share/motif-apple-music/chromium
+```
+
+Later launches reuse that session.
+
+## Architecture
+
+The C frontend communicates with the local bridge on `127.0.0.1:17876` by default. The bridge drives Apple Music through the authenticated web page's MusicKit instance, with DOM control matching used only as a fallback. Artwork is decoded by Chromium and transferred to the native client as packed RGB24 data.
+
+See [`docs/protocol.md`](docs/protocol.md) for the current bridge contract.
+
+## Development versioning
+
+Feature milestones use whole DEV numbers, for example `0.2.0-DEV-23`. Small fixes and presentation-only revisions stay on the same milestone with a fractional suffix, for example `0.2.0-DEV-22.3`.
+
+## Status
+
+This is development software and is not affiliated with or endorsed by Apple Inc.
